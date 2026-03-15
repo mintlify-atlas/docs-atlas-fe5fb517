@@ -1,0 +1,288 @@
+---
+title: "Server"
+description: "Configure and start the Colyseus server process with the Server class and defineServer() helper."
+---
+
+The `Server` class is the entry point for your Colyseus application. It wires together the transport layer, matchmaker, presence backend, and room driver, then listens for incoming connections.
+
+## Basic usage
+
+```typescript
+import { Server } from "@colyseus/core";
+import { GameRoom } from "./GameRoom";
+
+const server = new Server();
+server.define("game", GameRoom);
+
+server.listen(2567).then(() => {
+  console.log("Colyseus server listening on port 2567");
+});
+```
+
+## `defineServer()` helper
+
+`defineServer()` is the recommended alternative to instantiating `Server` directly. It accepts rooms and routes alongside all standard `ServerOptions` in a single declarative call and provides full TypeScript inference for room types.
+
+```typescript
+import { defineServer, defineRoom } from "@colyseus/core";
+import { GameRoom } from "./GameRoom";
+import { ChatRoom } from "./ChatRoom";
+
+const server = defineServer({
+  rooms: {
+    game: defineRoom(GameRoom),
+    chat: defineRoom(ChatRoom),
+  },
+});
+
+server.listen(2567);
+```
+
+### `defineRoom()`
+
+`defineRoom()` wraps a `Room` class and optional default `onCreate` options into a `RegisteredHandler` so it can be passed into `defineServer()`.
+
+```typescript
+export function defineRoom<T extends Room>(
+  roomKlass: T,
+  defaultOptions?: Parameters<InstanceType<T>["onCreate"]>[0],
+): RegisteredHandler;
+```
+
+```typescript
+import { defineRoom } from "@colyseus/core";
+import { GameRoom } from "./GameRoom";
+
+// With default onCreate options
+const gameHandler = defineRoom(GameRoom, { maxPlayers: 4 });
+```
+
+## `server.define()`
+
+If you prefer the imperative API, use `server.define()` after creating the `Server` instance.
+
+```typescript
+// Register with an explicit name
+server.define("game", GameRoom);
+
+// Register using the class name (GameRoom → "GameRoom")
+server.define(GameRoom);
+
+// Register with default onCreate options
+server.define("game", GameRoom, { maxPlayers: 4 });
+```
+
+## `server.listen(port)`
+
+Starts the HTTP/WebSocket server on the specified port (or Unix socket path). Returns a `Promise<void>` that resolves once the server is ready to accept connections.
+
+```typescript
+await server.listen(2567);
+// or with hostname / backlog
+await server.listen(2567, "0.0.0.0", 511);
+```
+
+Before the transport begins accepting connections, `listen()` will:
+1. Execute `beforeListen()` callback if provided.
+2. Signal the MatchMaker to start accepting room creation requests.
+3. Bind the HTTP router to the transport.
+
+## `ServerOptions`
+
+Pass an options object to the `Server` constructor or `defineServer()`.
+
+```typescript
+const server = new Server({
+  presence: new RedisPresence(),
+  driver: new RedisDriver(),
+  devMode: true,
+});
+```
+
+### Transport and infrastructure
+
+<ParamField path="transport" type="Transport">
+  Custom transport layer. Defaults to `WebSocketTransport` from `@colyseus/ws-transport` if not provided. Use `@colyseus/uwebsockets-transport` for higher performance.
+
+  ```typescript
+  import { WebSocketTransport } from "@colyseus/ws-transport";
+
+  new Server({
+    transport: new WebSocketTransport({ pingInterval: 5000 }),
+  });
+  ```
+</ParamField>
+
+<ParamField path="presence" type="Presence">
+  Pub/sub backend used for cross-process communication. Defaults to `LocalPresence`. Use `RedisPresence` from `@colyseus/redis-presence` for multi-process deployments.
+</ParamField>
+
+<ParamField path="driver" type="MatchMakerDriver">
+  Persistence backend for room listings. Defaults to `LocalDriver`. Use `RedisDriver` or `MongooseDriver` for multi-process deployments.
+</ParamField>
+
+<ParamField path="publicAddress" type="string">
+  The publicly accessible URL of this server process. Required when running behind a load balancer so that the MatchMaker can instruct clients to connect to the correct process.
+
+  ```typescript
+  new Server({ publicAddress: "wss://game1.example.com" });
+  ```
+</ParamField>
+
+### Lifecycle callbacks
+
+<ParamField path="beforeListen" type="() => Promise<void> | void">
+  Async callback executed before the server begins accepting connections. Use this to connect to databases or external services.
+
+  ```typescript
+  new Server({
+    beforeListen: async () => {
+      await database.connect();
+    },
+  });
+  ```
+</ParamField>
+
+<ParamField path="express" type="(app: express.Application) => void">
+  Callback to configure custom Express routes. When provided, the transport initialises an Express-compatible application and passes it to this callback. For the uWebSockets transport, this uses the `uwebsockets-express` module.
+
+  ```typescript
+  import { Server } from "@colyseus/core";
+
+  new Server({
+    express: (app) => {
+      app.get("/health", (_req, res) => res.json({ status: "ok" }));
+      app.post("/api/login", loginHandler);
+    },
+  });
+  ```
+</ParamField>
+
+### Matchmaking
+
+<ParamField path="selectProcessIdToCreateRoom" type="SelectProcessIdCallback">
+  Override the default process-selection strategy for room creation. By default, the MatchMaker assigns new rooms to the process with the fewest active rooms.
+
+  ```typescript
+  new Server({
+    selectProcessIdToCreateRoom: async (roomName, clientOptions) => {
+      // return the processId that should create the room
+      return myCustomLoadBalancer.pick(roomName);
+    },
+  });
+  ```
+</ParamField>
+
+<ParamField path="isStandaloneMatchMaker" type="boolean" default="false">
+  When `true`, this process acts as a dedicated MatchMaker and does not spawn room instances. Useful for horizontally scaled deployments where you want to separate matchmaking from game logic.
+</ParamField>
+
+### Developer experience
+
+<ParamField path="devMode" type="boolean" default="false">
+  Enables development mode. Rooms are cached on graceful shutdown and automatically restored when the process restarts, so connected clients can seamlessly reconnect. **Not suitable for production**—the cache operation is costly and schema changes may cause mismatch errors.
+</ParamField>
+
+<ParamField path="gracefullyShutdown" type="boolean" default="true">
+  Registers OS signal handlers (`SIGINT`, `SIGTERM`) to trigger a graceful shutdown sequence. Set to `false` if you manage process signals yourself.
+</ParamField>
+
+<ParamField path="logger" type="any">
+  Custom logger instance. Must implement `info`, `warn`, `error`, and `debug` methods. Defaults to Colyseus' built-in `logger`.
+</ParamField>
+
+<ParamField path="greet" type="boolean" default="true">
+  Print the Colyseus greeting banner to stdout when the server starts.
+</ParamField>
+
+## Configuring Express routes
+
+You can define HTTP routes alongside your WebSocket server by providing an `express` callback in `ServerOptions`. The same Express app serves both HTTP and WebSocket traffic.
+
+```typescript
+import { Server } from "@colyseus/core";
+import { GameRoom } from "./GameRoom";
+import jwt from "jsonwebtoken";
+
+const server = new Server({
+  express: (app) => {
+    // REST endpoint
+    app.get("/api/rooms", async (_req, res) => {
+      const rooms = await matchMaker.query({ name: "game" });
+      res.json(rooms);
+    });
+
+    // Middleware
+    app.use("/api/admin", (req, res, next) => {
+      try {
+        jwt.verify(req.headers.authorization, process.env.SECRET);
+        next();
+      } catch {
+        res.status(401).json({ error: "Unauthorized" });
+      }
+    });
+  },
+});
+
+server.define("game", GameRoom);
+server.listen(2567);
+```
+
+<Note>
+For the uWebSockets transport, Express compatibility is provided by the `uwebsockets-express` module. The API is the same from your callback's perspective.
+</Note>
+
+## Graceful shutdown
+
+When `gracefullyShutdown` is `true` (the default), Colyseus intercepts `SIGINT` and `SIGTERM` and runs the following sequence:
+
+<Steps>
+  <Step title="onBeforeShutdown callback">
+    Executes the user-defined `onBeforeShutdown` callback if registered.
+  </Step>
+  <Step title="Lock all rooms">
+    The MatchMaker locks every active room so no new clients can join.
+  </Step>
+  <Step title="Wait for rooms to dispose">
+    Each room's `onBeforeShutdown()` is called, which by default disconnects all clients. The process waits until every room's `onDispose()` resolves.
+  </Step>
+  <Step title="Shut down transport, presence, and driver">
+    Network connections are closed and backend adapters are shut down cleanly.
+  </Step>
+  <Step title="onShutdown callback">
+    Executes the user-defined `onShutdown` callback.
+  </Step>
+  <Step title="Process exit">
+    The process exits with code `0` (or `1` if an error occurred and not in `devMode`).
+  </Step>
+</Steps>
+
+Register custom shutdown callbacks:
+
+```typescript
+server.onBeforeShutdown(async () => {
+  // called before rooms are disposed
+  console.log("Server is shutting down...");
+});
+
+server.onShutdown(async () => {
+  // called after all rooms have been disposed
+  await database.disconnect();
+});
+```
+
+## Simulating latency (development only)
+
+Useful during local development to reproduce high-latency conditions:
+
+```typescript
+// Add 200ms round-trip latency
+server.simulateLatency(200);
+
+// Disable
+server.simulateLatency(0);
+```
+
+<Warning>
+`simulateLatency()` is for local testing only. Never call it in production—it deliberately delays every message sent between server and clients.
+</Warning>

@@ -1,0 +1,88 @@
+---
+title: "Client SDK Overview"
+description: "Connect to a Colyseus server, join rooms, send and receive messages, and synchronize game state from any supported platform."
+---
+
+The Colyseus Client SDK lets your game or application connect to a Colyseus server, join rooms, exchange messages, and receive real-time state updates. A single unified API is available across JavaScript/TypeScript and all major game engines.
+
+## How it works
+
+1. Create a `Client` pointed at your server endpoint.
+2. Call a matchmaking method (`joinOrCreate`, `join`, `create`, `joinById`) to enter a room.
+3. The returned `Room` object exposes callbacks for state changes, messages, errors, and disconnections.
+4. Call `room.send()` to push messages to the server at any time.
+
+```typescript
+import { Client } from "@colyseus/sdk";
+
+const client = new Client("ws://localhost:2567");
+
+// Join or create a room named "game"
+const room = await client.joinOrCreate("game");
+
+// Listen for state changes
+room.onStateChange((state) => {
+  console.log("new state:", state);
+});
+
+// Send a message to the server
+room.send("move", { direction: "up" });
+
+// Listen for a specific message type from the server
+room.onMessage("scored", (data) => {
+  console.log("player scored:", data);
+});
+```
+
+## Supported platforms
+
+<Columns cols={3}>
+  <Card title="TypeScript / JavaScript" icon="js" href="/client/platforms/typescript">
+    Browser, Node.js, React, and any JS runtime.
+  </Card>
+  <Card title="Unity" icon="unity" href="/client/platforms/unity">
+    C# SDK for Unity. Download the `.unitypackage` from GitHub Releases.
+  </Card>
+  <Card title="Godot" icon="gamepad-2" href="/client/platforms/godot">
+    GDExtension with GDScript and C# support.
+  </Card>
+  <Card title="GameMaker" icon="gamepad" href="/client/platforms/gamemaker">
+    GML extension for GameMaker Studio 2.
+  </Card>
+  <Card title="Defold" icon="circle" href="/client/platforms/defold">
+    Lua extension for the Defold game engine.
+  </Card>
+  <Card title="Construct 3" icon="layers" href="/client/platforms/construct3">
+    Visual addon from the Construct marketplace.
+  </Card>
+  <Card title="Haxe" icon="code" href="/client/platforms/haxe">
+    Cross-platform Haxe library via haxelib.
+  </Card>
+</Columns>
+
+## Core concepts
+
+**Client** — The entry point. Accepts a server URL or structured `EndpointSettings` object. Exposes matchmaking methods, an HTTP client (`client.http`), and an authentication module (`client.auth`).
+
+**Room** — The object returned after successfully joining a room. Holds the synchronized `state`, and exposes `onStateChange`, `onMessage`, `onError`, and `onLeave` event callbacks.
+
+**State synchronization** — The server sends the full state on first join, then binary-encoded delta patches on every subsequent change. The SDK applies these patches automatically; your `onStateChange` callback always receives the latest full state.
+
+**Reconnection** — The SDK automatically attempts to reconnect after unexpected disconnections (network drops, server restarts). Use `room.reconnectionToken` with `client.reconnect()` for manual or cross-session reconnection.
+
+## Next steps
+
+<Columns cols={2}>
+  <Card title="Installation" icon="download" href="/client/installation">
+    Install the SDK for your platform.
+  </Card>
+  <Card title="Colyseus Client" icon="plug" href="/client/client">
+    Full reference for the Client class and matchmaking methods.
+  </Card>
+  <Card title="Room (Client)" icon="door-open" href="/client/room">
+    Events, state access, sending messages, and reconnection.
+  </Card>
+  <Card title="Authentication" icon="lock" href="/client/auth">
+    Sign in with email, anonymous auth, and OAuth providers.
+  </Card>
+</Columns>

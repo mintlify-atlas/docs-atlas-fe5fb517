@@ -1,0 +1,139 @@
+---
+title: "Client SDK Installation"
+description: "Install the Colyseus client SDK for TypeScript, Unity, Godot, GameMaker, Defold, Construct, Haxe, and more."
+---
+
+## Available SDKs
+
+| Platform | Install / Download |
+|----------|-----------------|
+| TypeScript / JavaScript | `npm install @colyseus/sdk` |
+| React | `npm install @colyseus/react` |
+| Unity | [Download `.unitypackage`](https://github.com/colyseus/colyseus-unity3d/releases/latest/download/Colyseus_Plugin.unitypackage) |
+| Godot | [Download from GitHub Releases](https://github.com/colyseus/native-sdk/releases?q=godot+sdk&expanded=true) |
+| GameMaker | [Download from GitHub Releases](https://github.com/colyseus/native-sdk/releases?q=gamemaker+sdk&expanded=true) |
+| Defold | See Defold documentation |
+| Construct 3 | [Download addon](https://www.construct.net/en/make-games/addons/111/colyseus-multiplayer-sdk) |
+| Haxe | `haxelib install colyseus` |
+| C / Static Libraries | [Download from GitHub Releases](https://github.com/colyseus/native-sdk/releases?q=%22Colyseus+Native+SDK+-+Static+Library%22&expanded=true) |
+
+## TypeScript / JavaScript
+
+<CodeGroup>
+  ```bash npm
+  npm install @colyseus/sdk
+  ```
+
+  ```bash yarn
+  yarn add @colyseus/sdk
+  ```
+
+  ```bash pnpm
+  pnpm add @colyseus/sdk
+  ```
+</CodeGroup>
+
+```typescript
+import { ColyseusSDK, getStateCallbacks } from "@colyseus/sdk";
+
+const client = new ColyseusSDK("ws://localhost:2567");
+
+const room = await client.joinOrCreate("my_room");
+
+// Reactive state callbacks
+const $ = getStateCallbacks(room);
+$(room.state).players.onAdd((player, sessionId) => {
+  console.log("player added:", sessionId);
+});
+
+// Send messages
+room.send("move", { x: 100, y: 200 });
+```
+
+### Full-stack type safety
+
+If you share your server's exported `server` object type with the client, the SDK can validate room names and message types at compile time:
+
+```typescript
+import { ColyseusSDK } from "@colyseus/sdk";
+import type { server } from "../../server/src/app.config.js";
+
+// The generic parameter enables typed joinOrCreate, send, http, etc.
+const client = new ColyseusSDK<typeof server>("ws://localhost:2567");
+```
+
+## React (`@colyseus/react`)
+
+<CodeGroup>
+  ```bash npm
+  npm install @colyseus/react
+  ```
+
+  ```bash yarn
+  yarn add @colyseus/react
+  ```
+</CodeGroup>
+
+`@colyseus/react` provides hooks and context helpers for integrating Colyseus rooms into a React application, including React Three Fiber (R3F) setups.
+
+## Unity
+
+<Steps>
+  <Step title="Download the package">
+    Download the latest `Colyseus_Plugin.unitypackage` from the [Unity SDK releases](https://github.com/colyseus/colyseus-unity3d/releases/latest/download/Colyseus_Plugin.unitypackage).
+  </Step>
+  <Step title="Import into Unity">
+    In the Unity Editor, go to **Assets → Import Package → Custom Package** and select the downloaded file.
+  </Step>
+  <Step title="Connect to the server">
+    ```csharp
+    var client = new ColyseusClient("ws://localhost:2567");
+    var room = await client.JoinOrCreate<MyRoomState>("my_room");
+    ```
+  </Step>
+</Steps>
+
+## Godot
+
+Download the latest Godot SDK release from [GitHub Releases](https://github.com/colyseus/native-sdk/releases?q=godot+sdk&expanded=true) and follow the installation steps in the release notes.
+
+## GameMaker
+
+Download the latest GameMaker SDK release from [GitHub Releases](https://github.com/colyseus/native-sdk/releases?q=gamemaker+sdk&expanded=true). Import it as a Local Package in the GameMaker IDE.
+
+## Defold
+
+Refer to the Colyseus Defold documentation for dependency and configuration instructions. A demo is available in the [Tank Battle repository](https://github.com/endel/tank-battle-multiplayer/tree/master/defold).
+
+## Construct 3
+
+Download the addon directly from the [Construct Addon Exchange](https://www.construct.net/en/make-games/addons/111/colyseus-multiplayer-sdk) and install it through **Menu → View → Addon Manager**.
+
+## Haxe
+
+```bash
+haxelib install colyseus
+```
+
+See the [Tank Battle Haxe demo](https://github.com/endel/tank-battle-multiplayer/tree/master/haxe) for a full working example.
+
+## C / Static Libraries
+
+Pre-built static libraries for native targets (including a [raylib demo](https://github.com/colyseus/native-sdk/tree/main/platforms/raylib)) are available on the [native-sdk releases page](https://github.com/colyseus/native-sdk/releases?q=%22Colyseus+Native+SDK+-+Static+Library%22&expanded=true).
+
+## Platform comparison
+
+<CardGroup cols={2}>
+  <Card title="TypeScript / JavaScript" icon="js">
+    Full-featured SDK with typed rooms, reactive state callbacks, and HTTP client. Works in Node.js, browsers, and Bun.
+  </Card>
+  <Card title="React" icon="react">
+    Hooks and context for React and React Three Fiber apps. Built on top of `@colyseus/sdk`.
+  </Card>
+  <Card title="Unity" icon="unity">
+    `.unitypackage` plugin with C# bindings. Supports the Schema state sync model.
+  </Card>
+  <Card title="Godot / GameMaker / Defold" icon="gamepad">
+    Native SDK binaries targeting each engine's scripting environment.
+  </Card>
+</CardGroup>

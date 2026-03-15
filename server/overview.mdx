@@ -1,0 +1,126 @@
+---
+title: "Server Overview"
+description: "High-level guide to the @colyseus/core package and its main building blocks."
+---
+
+`@colyseus/core` is the heart of every Colyseus server. It provides the classes and utilities you compose to create authoritative multiplayer game sessions: a **Server** that listens for connections, **Room** instances that host game logic, **Client** handles representing each connected player, a **MatchMaker** that routes join requests to the right room, a **Transport** layer for WebSocket communication, a **Presence** backend for cross-process pub/sub, and a **Driver** for persisting room listings.
+
+## Core building blocks
+
+<Columns cols={2}>
+  <Card title="Server" icon="server" href="/server/server">
+    Entry point for your application. Registers room types, configures transports, and starts listening on a port.
+  </Card>
+  <Card title="Room" icon="gamepad" href="/server/room">
+    Hosts a game session. Manages lifecycle hooks, state synchronization, and per-client messaging.
+  </Card>
+  <Card title="Client" icon="user" href="/server/client">
+    Server-side handle for an individual player connection. Provides send, leave, and error helpers.
+  </Card>
+  <Card title="State Synchronization" icon="rotate" href="/server/state-synchronization">
+    How @colyseus/schema encodes and sends delta patches of room state to every connected client.
+  </Card>
+</Columns>
+
+## Component hierarchy
+
+The diagram below shows how the main pieces relate to each other at runtime.
+
+```
+Server
+├── Transport          — WebSocket / uWebSockets adapter
+├── MatchMaker         — Routes join/create requests
+│   ├── Driver         — Persists room listings (Local / Redis / MongoDB)
+│   └── Presence       — Pub/sub across processes (Local / Redis)
+└── Room[]             — Active game sessions
+    ├── State          — @colyseus/schema object broadcast to clients
+    ├── Client[]       — Connected player handles
+    └── Clock          — Timers and simulation intervals
+```
+
+## Packages at a glance
+
+| Package | Purpose |
+|---|---|
+| `@colyseus/core` | Server, Room, Client, MatchMaker, Transport |
+| `@colyseus/schema` | Serializable state with delta patches |
+| `@colyseus/ws-transport` | Default WebSocket transport (built on `ws`) |
+| `@colyseus/uwebsockets-transport` | High-performance uWebSockets.js transport |
+| `@colyseus/redis-presence` | Redis-backed Presence for multi-process deployments |
+| `@colyseus/redis-driver` | Redis-backed Driver for multi-process deployments |
+| `@colyseus/tools` | Colyseus Cloud deployment helpers |
+
+<Note>
+For a single-process development setup the default `LocalPresence` and `LocalDriver` built into `@colyseus/core` are sufficient. Switch to the Redis variants when you scale to multiple Node.js processes.
+</Note>
+
+## Typical startup sequence
+
+<Steps>
+  <Step title="Define room types">
+    Extend `Room` and implement lifecycle hooks (`onCreate`, `onJoin`, `onLeave`, etc.).
+
+    ```typescript
+    import { Room, Client } from "@colyseus/core";
+    import { MyState } from "./MyState";
+
+    class GameRoom extends Room<{ state: MyState }> {
+      onCreate() {
+        this.state = new MyState();
+      }
+
+      onJoin(client: Client) {
+        console.log(client.sessionId, "joined");
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Configure the server">
+    Create a `Server` instance and register your room classes.
+
+    ```typescript
+    import { Server } from "@colyseus/core";
+
+    const server = new Server();
+    server.define("game", GameRoom);
+    ```
+  </Step>
+
+  <Step title="Listen for connections">
+    Call `server.listen()` to start accepting WebSocket connections.
+
+    ```typescript
+    server.listen(2567).then(() => {
+      console.log("Listening on port 2567");
+    });
+    ```
+  </Step>
+</Steps>
+
+## What happens when a client joins
+
+1. The client SDK calls `client.joinOrCreate("game")` (or `join` / `create`).
+2. The MatchMaker checks the Driver for an available room that matches the request.
+3. If no room exists, a new `GameRoom` instance is created and `onCreate()` is called.
+4. A seat is reserved for the client; `onAuth()` runs to validate credentials.
+5. The WebSocket connection upgrades and `onJoin()` fires.
+6. The full room state is sent to the new client.
+7. From this point forward, every `patchRate` tick (default 50 ms / 20 fps) any changed state fields are encoded as a binary delta patch and broadcast.
+
+## Next steps
+
+<Columns cols={2}>
+  <Card title="Server configuration" icon="gear" href="/server/server">
+    Learn all `ServerOptions`, the `defineServer()` helper, and graceful shutdown.
+  </Card>
+  <Card title="Room lifecycle" icon="circle-play" href="/server/room">
+    Deep-dive into every lifecycle hook, property, and method on the Room class.
+  </Card>
+  <Card title="Client API" icon="plug" href="/server/client">
+    Reference for the `Client` interface available inside your room callbacks.
+  </Card>
+  <Card title="State synchronization" icon="tower-broadcast" href="/server/state-synchronization">
+    Understand how schema-based delta encoding keeps clients in sync.
+  </Card>
+</Columns>

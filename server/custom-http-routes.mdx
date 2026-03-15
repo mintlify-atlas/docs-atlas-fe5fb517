@@ -1,0 +1,145 @@
+---
+title: Custom HTTP Routes
+description: Add REST API endpoints and middleware to your Colyseus server alongside WebSocket rooms.
+---
+
+Colyseus is built on top of `@colyseus/better-call` for HTTP routing. You can define custom endpoints, routers, and middleware that share the same HTTP server as your WebSocket game server.
+
+## Imports
+
+```typescript
+import {
+  createEndpoint,
+  createRouter,
+  createMiddleware,
+  toNodeHandler,
+} from "@colyseus/core";
+```
+
+## Creating an endpoint
+
+`createEndpoint` defines a typed HTTP endpoint:
+
+```typescript
+import { createEndpoint, createRouter } from "@colyseus/core";
+
+const healthCheck = createEndpoint("/api/health", { method: "GET" }, async (ctx) => {
+  return new Response(JSON.stringify({ ok: true }), {
+    headers: { "Content-Type": "application/json" },
+  });
+});
+
+const leaderboard = createEndpoint("/api/leaderboard", { method: "GET" }, async (ctx) => {
+  const scores = await db.getTopScores(10);
+  return Response.json(scores);
+});
+```
+
+## Creating a router
+
+Group endpoints into a router and pass it to the `Server`:
+
+```typescript
+import { Server } from "colyseus";
+import { createRouter, createEndpoint } from "@colyseus/core";
+
+const apiRouter = createRouter({
+  healthCheck: createEndpoint("/api/health", { method: "GET" }, async () =>
+    Response.json({ ok: true })
+  ),
+  leaderboard: createEndpoint("/api/leaderboard", { method: "GET" }, async () =>
+    Response.json(await db.getTopScores())
+  ),
+  submitScore: createEndpoint("/api/score", { method: "POST" }, async (ctx) => {
+    const body = await ctx.request.json();
+    await db.saveScore(body.playerId, body.score);
+    return Response.json({ saved: true });
+  }),
+});
+
+const gameServer = new Server({ router: apiRouter });
+gameServer.listen(2567);
+```
+
+## Protected routes with middleware
+
+Use `createMiddleware` (re-exported from `@colyseus/core`) to add authentication or other cross-cutting logic:
+
+```typescript
+import { createMiddleware, createEndpoint } from "@colyseus/core";
+import { auth } from "@colyseus/auth";
+
+// Auth middleware verifies the Bearer token
+const protectedRoute = createEndpoint(
+  "/api/admin/rooms",
+  {
+    method: "GET",
+    use: [auth.middleware()], // JWT validation
+  },
+  async (ctx) => {
+    // ctx.context.auth contains the decoded JWT
+    const rooms = await matchMaker.query({});
+    return Response.json(rooms);
+  }
+);
+```
+
+## Express integration
+
+If you prefer Express, pass `express: true` to the `Server` constructor, then retrieve the Express app:
+
+```typescript
+import express from "express";
+import { Server } from "colyseus";
+
+const gameServer = new Server({ express: true });
+const app = gameServer.transport.getExpressApp();
+
+// Mount Express middleware and routes
+app.use(express.json());
+
+app.get("/api/status", (req, res) => {
+  res.json({ status: "ok", uptime: process.uptime() });
+});
+
+app.post("/api/webhook", (req, res) => {
+  console.log("Webhook received:", req.body);
+  res.sendStatus(200);
+});
+
+gameServer.listen(2567);
+```
+
+<Note>
+  Express routes and `createRouter` routes can coexist. Colyseus first checks the router for a matching endpoint; if none is found, the request falls through to Express.
+</Note>
+
+## `toNodeHandler`
+
+`toNodeHandler` adapts a better-call router handler to the standard Node.js `(req, res)` signature. This is useful when integrating with other Node.js HTTP frameworks:
+
+```typescript
+import http from "http";
+import { createRouter, createEndpoint, toNodeHandler } from "@colyseus/core";
+
+const router = createRouter({
+  ping: createEndpoint("/ping", { method: "GET" }, async () =>
+    new Response("pong")
+  ),
+});
+
+const server = http.createServer(toNodeHandler(router.handler));
+server.listen(3000);
+```
+
+## Default routes
+
+Colyseus automatically registers the following routes that you should be aware of:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/matchmake/:method/:roomName` | Matchmaking endpoint used by the client SDK |
+| `GET` | `/` | Returns the Colyseus version string |
+| `GET` | `/__healthcheck` | Returns `200 OK` for health probes |
+
+Do not define routes that conflict with these paths.

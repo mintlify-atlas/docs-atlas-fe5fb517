@@ -1,0 +1,248 @@
+---
+title: 'QueueRoom'
+description: 'Rank-based matchmaking queue that groups players by skill and spawns game rooms when a group is ready.'
+keywords: ['QueueRoom', 'matchmaking queue', 'rank', 'skill-based matchmaking', 'SBMM']
+---
+
+`QueueRoom` is a built-in Colyseus room that implements a tick-based skill matchmaking queue. Players join the queue with a `rank` value. Every second the queue re-evaluates all waiting players, groups compatible players together, and — when a group reaches the target size — creates a new game room and sends each player a seat reservation.
+
+## How the queue works
+
+<Steps>
+  <Step title="Client joins QueueRoom">
+    The client calls `joinOrCreate('queue', { rank: 1500 })`. A seat is reserved in the `QueueRoom` instance and `onJoin` is called, which calls `addToQueue` with the client's rank and optional team ID.
+  </Step>
+
+  <Step title="Queue cycles run every second">
+    `setSimulationInterval` drives `reassignMatchGroups` at `cycleTickInterval` (default 1000 ms). On every tick:
+    - All active clients are sorted by rank.
+    - Each client is assigned to a compatible group using the `compare` function.
+    - Groups that reach `maxPlayers` are marked `ready`.
+  </Step>
+
+  <Step title="Ready groups spawn a game room">
+    `onGroupReady` is called with the ready group. By default this calls `matchMaker.createRoom(matchRoomName, {})`. You can override `onGroupReady` to apply custom logic (e.g., pass team data to the room).
+  </Step>
+
+  <Step title="Seats are reserved and clients are notified">
+    `matchMaker.reserveMultipleSeatsFor` reserves a seat for every client in the group. Each client receives a `seat` message containing the seat reservation they use to connect to the new game room.
+  </Step>
+
+  <Step title="Client confirms and connects">
+    The client sends a `confirm` message back to the queue room, then opens a new WebSocket connection to the game room using the received seat reservation.
+  </Step>
+</Steps>
+
+## QueueOptions reference
+
+<ParamField path="matchRoomName" type="string" required>
+  The name of the room to create when a group is ready. Must match a room registered with `app.define()`.
+</ParamField>
+
+<ParamField path="maxPlayers" type="number">
+  Number of players required to form a match group. Defaults to `4`.
+</ParamField>
+
+<ParamField path="maxWaitingCycles" type="number">
+  Number of ticks a client can wait before being eligible for an incomplete group (requires `allowIncompleteGroups: true`). Defaults to `15`.
+</ParamField>
+
+<ParamField path="maxWaitingCyclesForPriority" type="number">
+  Number of ticks after which a client gains high-priority status and is allowed to join any group regardless of rank compatibility. Defaults to `10`.
+</ParamField>
+
+<ParamField path="maxTeamSize" type="number">
+  When set, enables team-based matching. Clients with the same `teamId` are grouped together first, and teams are matched against other teams of similar average rank.
+</ParamField>
+
+<ParamField path="allowIncompleteGroups" type="boolean">
+  When `true`, groups that have not reached `maxPlayers` but have been waiting longer than `maxWaitingCycles` are started anyway. Your game room should fill the missing spots with bots. Defaults to `false`.
+</ParamField>
+
+<ParamField path="compare" type="(client: QueueClientData, group: QueueMatchGroup) => boolean">
+  Custom compatibility function. Return `true` to place the client in the group, `false` to start a new group. The default implementation accepts the client if the absolute rank difference is less than 10, or the ratio of the difference to the group's average rank is ≤ 2.
+</ParamField>
+
+<ParamField path="onGroupReady" type="(group: QueueMatchGroup) => Promise<IRoomCache>">
+  Custom callback invoked when a group is ready. Receives the full `QueueMatchGroup` object. Must return the `IRoomCache` of the created game room. When set, `matchRoomName` is still required but `QueueRoom` will not call `matchMaker.createRoom` directly.
+</ParamField>
+
+## Type reference
+
+### QueueMatchGroup
+
+```typescript
+interface QueueMatchGroup {
+  averageRank: number;                              // Mean rank of all clients in the group
+  clients: Array<Client<{ userData: QueueClientData }>>; // Clients currently assigned to the group
+  ready?: boolean;                                  // true when the group has enough players
+  confirmed?: number;                               // Count of clients that confirmed the seat
+}
+```
+
+### QueueMatchTeam
+
+```typescript
+interface QueueMatchTeam {
+  averageRank: number;       // Mean rank of team members
+  clients: Array<Client<{ userData: QueueClientData }>>;
+  teamId: string | symbol;   // Team identifier supplied by the clients
+}
+```
+
+### QueueClientData
+
+```typescript
+interface QueueClientData {
+  rank: number;              // Skill rank — used for group compatibility
+  currentCycle?: number;     // How many ticks this client has been waiting
+  teamId?: string;           // Optional team affiliation
+  options?: any;             // Full options from the original join call
+  group?: QueueMatchGroup;   // Currently assigned group
+  confirmed?: boolean;       // Whether the client confirmed its seat
+  highPriority?: boolean;    // Elevated after maxWaitingCyclesForPriority ticks
+  lastQueueClientCount?: number; // Last reported queue position sent to client
+}
+```
+
+## Client-side messages
+
+### Receiving messages
+
+| Message type | Payload | Description |
+|---|---|---|
+| `clients` | `number` | Current number of players in the client's match group |
+| `seat` | `ISeatReservation` | Seat reservation for the matched game room |
+
+### Sending messages
+
+| Message type | Payload | Description |
+|---|---|---|
+| `confirm` | `{}` | Acknowledge the seat reservation and leave the queue |
+
+## Usage examples
+
+### Basic setup
+
+```typescript
+import { Server, QueueRoom } from '@colyseus/core';
+import { BattleRoom } from './BattleRoom';
+
+const app = new Server();
+
+app.define('battle', BattleRoom);
+
+app.define('queue', QueueRoom, {
+  matchRoomName: 'battle',
+  maxPlayers: 4,
+  maxWaitingCycles: 20,
+});
+
+app.listen(2567);
+```
+
+### Client-side queue flow
+
+```typescript
+import { Client } from 'colyseus.js';
+
+const client = new Client('ws://localhost:2567');
+
+// Join the queue with a rank
+const queue = await client.joinOrCreate('queue', { rank: 1450 });
+
+// Track how many players are in the current match group
+queue.onMessage('clients', (count) => {
+  console.log(`Players in group: ${count}`);
+});
+
+// A seat is ready — confirm and connect to the game room
+queue.onMessage('seat', async (reservation) => {
+  queue.send('confirm', {});
+
+  // Use the seat reservation to connect to the matched game room
+  const gameRoom = await client.consumeSeatReservation(reservation);
+  console.log('Connected to game room:', gameRoom.id);
+});
+```
+
+### Team-based matching
+
+```typescript
+// Server — enable team matching
+app.define('queue', QueueRoom, {
+  matchRoomName: 'team_battle',
+  maxPlayers: 6,      // 2 teams of 3
+  maxTeamSize: 3,
+});
+
+// Client — players on the same team share a teamId
+const queue = await client.joinOrCreate('queue', {
+  rank: 1200,
+  teamId: 'team_alpha',
+});
+```
+
+### Custom group ready callback
+
+Override `onGroupReady` to pass group data into the new game room:
+
+```typescript
+app.define('queue', QueueRoom, {
+  matchRoomName: 'battle',
+  maxPlayers: 2,
+  onGroupReady: async function(group) {
+    // 'this' refers to the QueueRoom instance
+    return matchMaker.createRoom(this.matchRoomName, {
+      players: group.clients.map(c => ({
+        sessionId: c.sessionId,
+        rank: c.userData.rank,
+      })),
+    });
+  },
+});
+```
+
+### Custom compare function
+
+```typescript
+app.define('queue', QueueRoom, {
+  matchRoomName: 'battle',
+  maxPlayers: 4,
+  compare: (client, group) => {
+    // Accept if rank difference is within ±100
+    return Math.abs(client.rank - group.averageRank) <= 100;
+  },
+});
+```
+
+## Incomplete groups and bots
+
+When `allowIncompleteGroups` is `true`, groups that time out without reaching `maxPlayers` are started with however many players are present. Your game room should detect and fill the missing spots:
+
+```typescript
+app.define('queue', QueueRoom, {
+  matchRoomName: 'battle',
+  maxPlayers: 4,
+  maxWaitingCycles: 15,
+  allowIncompleteGroups: true,
+});
+```
+
+```typescript
+class BattleRoom extends Room {
+  onCreate(options: any) {
+    const expectedPlayers = 4;
+    const realPlayers = options.players?.length ?? 0;
+    const botsNeeded = expectedPlayers - realPlayers;
+
+    for (let i = 0; i < botsNeeded; i++) {
+      this.addBot();
+    }
+  }
+}
+```
+
+<Warning>
+  `QueueRoom` does not persist queue state. If the server process restarts, all waiting clients are disconnected. Implement client-side retry logic to handle this case gracefully.
+</Warning>

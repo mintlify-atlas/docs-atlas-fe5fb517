@@ -1,0 +1,157 @@
+---
+title: Authentication Overview
+description: Add authentication to your Colyseus server using the @colyseus/auth package.
+---
+
+`@colyseus/auth` provides a full authentication layer for Colyseus, including email/password registration, anonymous sign-in, JWT token management, and OAuth provider support. It exposes an Express router you mount alongside your game server.
+
+## Installation
+
+<CodeGroup>
+```bash npm
+npm install @colyseus/auth
+```
+```bash yarn
+yarn add @colyseus/auth
+```
+```bash pnpm
+pnpm add @colyseus/auth
+```
+</CodeGroup>
+
+## Mounting the auth router
+
+Call `auth.routes()` and pass your callback implementations, then mount the returned Express router on your app.
+
+```typescript
+import { Server } from "colyseus";
+import { auth } from "@colyseus/auth";
+
+const gameServer = new Server();
+
+// Mount auth routes at /auth/*
+gameServer.express.use("/auth", auth.routes({
+  onFindUserByEmail: async (email) => {
+    return db.users.findOne({ email });
+  },
+  onRegisterWithEmailAndPassword: async (email, password) => {
+    return db.users.create({ email, password });
+  },
+}));
+```
+
+This registers the following HTTP endpoints:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/auth/login` | Login with email and password |
+| `POST` | `/auth/register` | Register a new account |
+| `POST` | `/auth/anonymous` | Anonymous sign-in |
+| `GET` | `/auth/userdata` | Return decoded JWT payload |
+| `POST` | `/auth/forgot-password` | Request a password reset email |
+| `GET/POST` | `/auth/reset-password` | Password reset form and action |
+| `GET` | `/auth/confirm-email` | Email address confirmation |
+
+## Per-room authentication with `onAuth`
+
+To validate a token before allowing a client to join a room, implement `onAuth` on your `Room` class. The method receives the auth context and must return truthy data (which becomes `client.auth`) or throw an error to reject the connection.
+
+```typescript
+import { Room, Client } from "colyseus";
+import { JWT } from "@colyseus/auth";
+
+export class GameRoom extends Room {
+  async onAuth(client: Client, options: any, context: any) {
+    // Verify the bearer token supplied by the client
+    const token = await JWT.verify(context.token);
+    return token; // becomes client.auth
+  }
+
+  onJoin(client: Client) {
+    console.log(client.auth); // decoded JWT payload
+  }
+}
+```
+
+### Static `Room.onAuth()` for pre-room validation
+
+You can also define a static `onAuth` that runs before room creation during matchmaking:
+
+```typescript
+import { Room, Client } from "colyseus";
+import { JWT } from "@colyseus/auth";
+
+export class GameRoom extends Room {
+  static async onAuth(token: string, context: any) {
+    return await JWT.verify(token);
+  }
+}
+```
+
+## Accessing auth data in a room
+
+Once `onAuth` resolves, the returned value is accessible on `client.auth` for the lifetime of that connection.
+
+```typescript
+onJoin(client: Client, options: any) {
+  console.log("Authenticated user:", client.auth);
+  console.log("User ID:", client.auth.id);
+}
+```
+
+## Auth settings reference
+
+<ParamField path="onFindUserByEmail" type="(email: string) => Promise<{ password: string }>" required>
+  Look up a user record by email address. Must return an object containing at least a `password` field.
+</ParamField>
+
+<ParamField path="onRegisterWithEmailAndPassword" type="(email: string, password: string, options: any) => Promise<unknown>" required>
+  Persist a new user. The `password` argument is already hashed. The `options` object may contain `upgradingToken` when converting an anonymous user.
+</ParamField>
+
+<ParamField path="onRegisterAnonymously" type="(options: any) => Promise<unknown>">
+  Called on `POST /auth/anonymous`. If omitted, a temporary anonymous user object is generated automatically.
+</ParamField>
+
+<ParamField path="onSendEmailConfirmation" type="(email: string, html: string, confirmLink: string) => Promise<unknown>">
+  Send the email-confirmation message. Omit to skip email verification.
+</ParamField>
+
+<ParamField path="onEmailConfirmed" type="(email: string) => Promise<unknown>">
+  Called when a user clicks the confirmation link.
+</ParamField>
+
+<ParamField path="onForgotPassword" type="(email: string, html: string, resetLink: string) => Promise<boolean | unknown>">
+  Send the password-reset email. Must be implemented together with `onResetPassword` to enable the forgot-password flow.
+</ParamField>
+
+<ParamField path="onResetPassword" type="(email: string, password: string) => Promise<unknown>">
+  Persist the new hashed password after a reset.
+</ParamField>
+
+<ParamField path="onParseToken" type="(token: JwtPayload) => Promise<unknown> | unknown">
+  Transform the decoded JWT payload before it is returned by `GET /auth/userdata`. Defaults to returning the payload as-is.
+</ParamField>
+
+<ParamField path="onGenerateToken" type="(userdata: unknown) => Promise<unknown>">
+  Produce a JWT from user data. Defaults to `JWT.sign(userdata)`.
+</ParamField>
+
+<ParamField path="onHashPassword" type="(password: string) => Promise<string>">
+  Hash a plain-text password before storage. Defaults to `Hash.make(password)` (scrypt).
+</ParamField>
+
+## Authentication strategies
+
+<CardGroup cols={2}>
+  <Card title="JWT" href="/server/auth/jwt">
+    Sign and verify JSON Web Tokens. Covers email/password registration and the full login flow.
+  </Card>
+  <Card title="OAuth" href="/server/auth/oauth">
+    Add social login with GitHub, Google, Discord, and 150+ other providers via the built-in OAuth module.
+  </Card>
+</CardGroup>
+
+<Note>
+  The `@colyseus/auth` APIs are in beta. Please report issues at [github.com/colyseus/colyseus/issues/660](https://github.com/colyseus/colyseus/issues/660).
+</Note>

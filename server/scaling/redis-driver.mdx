@@ -1,0 +1,123 @@
+---
+title: Redis Driver
+description: Store the Colyseus room registry in Redis for distributed matchmaking across multiple processes.
+---
+
+`RedisDriver` replaces the default in-memory room registry with a Redis hash, enabling any Colyseus process to query and update room listings.
+
+## Installation
+
+<CodeGroup>
+```bash npm
+npm install @colyseus/redis-driver
+```
+```bash yarn
+yarn add @colyseus/redis-driver
+```
+```bash pnpm
+pnpm add @colyseus/redis-driver
+```
+</CodeGroup>
+
+## Basic usage
+
+```typescript
+import { Server } from "colyseus";
+import { RedisDriver } from "@colyseus/redis-driver";
+
+const gameServer = new Server({
+  driver: new RedisDriver(),
+});
+```
+
+With no arguments, `RedisDriver` connects to `127.0.0.1:6379`.
+
+## Configuration options
+
+`RedisDriver` accepts the same constructor signatures as ioredis.
+
+<Tabs>
+  <Tab title="Connection string">
+    ```typescript
+    new RedisDriver("redis://:password@redis-host:6380/0")
+    ```
+  </Tab>
+  <Tab title="Options object">
+    ```typescript
+    new RedisDriver({
+      host: "redis-host",
+      port: 6380,
+      password: "secret",
+      db: 0,
+    })
+    ```
+  </Tab>
+  <Tab title="Redis Cluster">
+    ```typescript
+    new RedisDriver(
+      [
+        { host: "redis-node-1", port: 6379 },
+        { host: "redis-node-2", port: 6379 },
+      ],
+      {
+        redisOptions: { password: "secret" },
+      }
+    )
+    ```
+  </Tab>
+</Tabs>
+
+## How room listings are stored
+
+The driver stores all room caches as fields inside a single Redis hash at the key `roomcaches`:
+
+```
+HGET roomcaches <roomId>  →  JSON string of IRoomCache
+```
+
+Each `IRoomCache` record contains:
+
+| Field | Description |
+|-------|-------------|
+| `roomId` | Unique room identifier |
+| `name` | Room handler name (e.g. `"game"`) |
+| `processId` | ID of the owning Node.js process |
+| `clients` | Current client count |
+| `maxClients` | Maximum allowed clients |
+| `locked` | Whether the room is locked |
+| `private` | Whether the room is private |
+| `createdAt` | ISO timestamp of room creation |
+| `metadata` | Custom metadata set by the room |
+
+Batch reads are optimised: concurrent `query()` calls within the same event-loop tick share a single `HGETALL` request to Redis.
+
+## Stale room cleanup
+
+When a process starts, `RedisDriver.cleanup(processId)` removes any stale room entries left over from a previous run of that process. This is called automatically by the matchmaker.
+
+## Full scaling example
+
+```typescript
+import { Server } from "colyseus";
+import { RedisPresence } from "@colyseus/redis-presence";
+import { RedisDriver } from "@colyseus/redis-driver";
+import { GameRoom } from "./GameRoom";
+
+const redisOptions = {
+  host: process.env.REDIS_HOST ?? "127.0.0.1",
+  port: Number(process.env.REDIS_PORT ?? 6379),
+  password: process.env.REDIS_PASSWORD,
+};
+
+const gameServer = new Server({
+  presence: new RedisPresence(redisOptions),
+  driver: new RedisDriver(redisOptions),
+});
+
+gameServer.define("game", GameRoom);
+gameServer.listen(Number(process.env.PORT ?? 2567));
+```
+
+<Tip>
+  Use the same Redis credentials for both `RedisPresence` and `RedisDriver`. You can connect them to the same Redis instance or separate instances depending on your infrastructure.
+</Tip>

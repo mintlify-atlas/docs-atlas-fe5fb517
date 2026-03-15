@@ -1,0 +1,327 @@
+---
+title: matchMaker
+description: Complete reference for the matchMaker module — room creation, querying, reconnection, and process management.
+---
+
+The `matchMaker` module is the core of Colyseus's room lifecycle management. It handles room creation, seat reservation, querying, and inter-process communication.
+
+Import it from `@colyseus/core`:
+
+```typescript
+import { matchMaker } from "@colyseus/core";
+```
+
+<Note>
+Most of these methods are also exposed as HTTP endpoints by the Colyseus transport layer. The client-side SDK calls them internally. You can call them directly for server-side room management (e.g., bots, administrative tools, or server-to-server logic).
+</Note>
+
+---
+
+## Matchmaking methods
+
+### `matchMaker.joinOrCreate(roomName, options?, authContext?)`
+
+Joins an available room or creates a new one if none exists. This is the most commonly used matchmaking method.
+
+```typescript
+const reservation = await matchMaker.joinOrCreate("game", { difficulty: "easy" });
+```
+
+<ParamField path="roomName" type="string" required>
+  The registered room type name.
+</ParamField>
+
+<ParamField path="options" type="object">
+  Options forwarded to `onAuth()` and `onCreate()` / `onJoin()`.
+</ParamField>
+
+<ParamField path="authContext" type="AuthContext">
+  Authentication context passed to the static `onAuth()` method.
+</ParamField>
+
+<ResponseField name="return" type="Promise<ISeatReservation>">
+  A seat reservation.
+  <Expandable title="ISeatReservation properties">
+    <ResponseField name="name" type="string">
+      The room type name.
+    </ResponseField>
+    <ResponseField name="sessionId" type="string">
+      Unique session ID for the joining client.
+    </ResponseField>
+    <ResponseField name="roomId" type="string">
+      The ID of the room instance the client should connect to.
+    </ResponseField>
+    <ResponseField name="publicAddress" type="string | undefined">
+      Public address of the server process handling this room.
+    </ResponseField>
+    <ResponseField name="processId" type="string | undefined">
+      The process ID of the server process handling this room.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### `matchMaker.create(roomName, options?, authContext?)`
+
+Always creates a new room, regardless of available rooms.
+
+```typescript
+const reservation = await matchMaker.create("game", { map: "forest" });
+```
+
+<ParamField path="roomName" type="string" required>
+  The registered room type name.
+</ParamField>
+
+<ParamField path="options" type="object">
+  Options passed to `onCreate()` and `onJoin()`.
+</ParamField>
+
+<ParamField path="authContext" type="AuthContext">
+  Authentication context.
+</ParamField>
+
+<ResponseField name="return" type="Promise<ISeatReservation>">
+  Seat reservation for the newly created room.
+</ResponseField>
+
+### `matchMaker.join(roomName, options?, authContext?)`
+
+Joins an existing available room. Throws an error if no room is available.
+
+```typescript
+const reservation = await matchMaker.join("lobby");
+```
+
+<ParamField path="roomName" type="string" required>
+  The registered room type name.
+</ParamField>
+
+<ParamField path="options" type="object">
+  Options passed to `onJoin()`.
+</ParamField>
+
+<ParamField path="authContext" type="AuthContext">
+  Authentication context.
+</ParamField>
+
+<ResponseField name="return" type="Promise<ISeatReservation>">
+  Seat reservation, or throws `MATCHMAKE_INVALID_CRITERIA` if no room is available.
+</ResponseField>
+
+### `matchMaker.joinById(roomId, options?, authContext?)`
+
+Joins a specific room instance by its `roomId`. Throws if the room is not found or is locked.
+
+```typescript
+const reservation = await matchMaker.joinById("abc123xyz", { spectator: true });
+```
+
+<ParamField path="roomId" type="string" required>
+  The specific room instance ID.
+</ParamField>
+
+<ParamField path="options" type="object">
+  Options passed to `onJoin()`.
+</ParamField>
+
+<ParamField path="authContext" type="AuthContext">
+  Authentication context.
+</ParamField>
+
+<ResponseField name="return" type="Promise<ISeatReservation>">
+  Seat reservation, or throws `MATCHMAKE_INVALID_ROOM_ID` if not found or locked.
+</ResponseField>
+
+### `matchMaker.reconnect(roomId, clientOptions, authContext?)`
+
+Attempts to reconnect a client to a room using its reconnection token. The room must have called `allowReconnection()` for the previous client.
+
+```typescript
+const reservation = await matchMaker.reconnect(roomId, {
+  reconnectionToken: token,
+});
+```
+
+<ParamField path="roomId" type="string" required>
+  The room instance ID.
+</ParamField>
+
+<ParamField path="clientOptions" type="object" required>
+  Must include `reconnectionToken` — the token provided by the client SDK.
+</ParamField>
+
+<ParamField path="authContext" type="AuthContext">
+  Authentication context.
+</ParamField>
+
+<ResponseField name="return" type="Promise<ISeatReservation>">
+  A new seat reservation for the reconnecting client, or throws if the token is invalid or expired.
+</ResponseField>
+
+---
+
+## Room query methods
+
+### `matchMaker.query(conditions, sortOptions?)`
+
+Returns all cached room listings matching the given conditions. Useful for administrative dashboards or server-side room discovery.
+
+```typescript
+const rooms = await matchMaker.query({ name: "game", locked: false });
+```
+
+<ParamField path="conditions" type="Partial<IRoomCache>">
+  Key-value pairs to match against stored room listings.
+</ParamField>
+
+<ParamField path="sortOptions" type="Record<string, 1 | -1>">
+  Sort order for the results.
+</ParamField>
+
+<ResponseField name="return" type="Promise<IRoomCache[]>">
+  Array of matching room cache entries.
+  <Expandable title="IRoomCache properties">
+    <ResponseField name="roomId" type="string">
+      Unique room identifier.
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      Room type name.
+    </ResponseField>
+    <ResponseField name="clients" type="number">
+      Current connected client count.
+    </ResponseField>
+    <ResponseField name="maxClients" type="number">
+      Maximum allowed clients.
+    </ResponseField>
+    <ResponseField name="locked" type="boolean">
+      Whether the room is locked.
+    </ResponseField>
+    <ResponseField name="private" type="boolean">
+      Whether the room is private.
+    </ResponseField>
+    <ResponseField name="metadata" type="any">
+      Room metadata.
+    </ResponseField>
+    <ResponseField name="processId" type="string">
+      The server process ID handling this room.
+    </ResponseField>
+    <ResponseField name="publicAddress" type="string | undefined">
+      Public address of the handling process.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### `matchMaker.findOneRoomAvailable(roomName, filterOptions?, sortOptions?)`
+
+Returns the first available (unlocked, public) room of the given type matching the filter options. Returns `undefined` if no room is found.
+
+```typescript
+const room = await matchMaker.findOneRoomAvailable("game", { difficulty: "easy" });
+if (room) {
+  console.log("Found room:", room.roomId);
+}
+```
+
+<ParamField path="roomName" type="string" required>
+  The room type name.
+</ParamField>
+
+<ParamField path="filterOptions" type="object">
+  Client options used to compute filter fields (as configured with `.filterBy()`).
+</ParamField>
+
+<ParamField path="sortOptions" type="Record<string, 1 | -1>">
+  Additional sort options.
+</ParamField>
+
+<ResponseField name="return" type="Promise<IRoomCache | undefined>">
+  The first matching room cache entry, or `undefined`.
+</ResponseField>
+
+### `matchMaker.getRoomById(roomId)`
+
+Returns room cache data for a specific room ID. Does not return the live `Room` instance.
+
+```typescript
+const room = await matchMaker.getRoomById("abc123xyz");
+```
+
+<ParamField path="roomId" type="string" required>
+  The room instance ID.
+</ParamField>
+
+<ResponseField name="return" type="Promise<IRoomCache | undefined>">
+  The room cache entry, or `undefined` if not found.
+</ResponseField>
+
+---
+
+## Process properties
+
+<ResponseField name="matchMaker.processId" type="string">
+  The unique identifier for the current server process. Auto-generated on startup, or restored from cache in dev mode.
+</ResponseField>
+
+<ResponseField name="matchMaker.publicAddress" type="string">
+  The public host/address for this process. Set via `ServerOptions.publicAddress`.
+</ResponseField>
+
+<ResponseField name="matchMaker.presence" type="Presence">
+  The shared presence backend used by this process for pub/sub and shared state.
+</ResponseField>
+
+<ResponseField name="matchMaker.driver" type="MatchMakerDriver">
+  The matchmaker storage driver (e.g., `LocalDriver`, `RedisDriver`, `MongooseDriver`).
+</ResponseField>
+
+<ResponseField name="matchMaker.stats" type="object">
+  Access to the stats module for per-process room and CCU counts.
+</ResponseField>
+
+---
+
+## Room type registration
+
+### `matchMaker.defineRoomType(roomName, RoomClass, defaultOptions?)`
+
+Registers a room class with the matchmaker under the given name. Normally called internally by `defineServer()` or `server.define()`. Can be used directly when building custom tooling.
+
+```typescript
+const handler = matchMaker.defineRoomType("game", GameRoom, { maxClients: 8 });
+```
+
+<ParamField path="roomName" type="string" required>
+  The public room type identifier used by clients.
+</ParamField>
+
+<ParamField path="RoomClass" type="typeof Room" required>
+  The `Room` subclass to register.
+</ParamField>
+
+<ParamField path="defaultOptions" type="object">
+  Default options merged with client options during room creation.
+</ParamField>
+
+<ResponseField name="return" type="RegisteredHandler">
+  A `RegisteredHandler` instance with chainable `.filterBy()`, `.sortBy()`, and `.enableRealtimeListing()` methods.
+</ResponseField>
+
+---
+
+## `MatchMakerState`
+
+The current internal state of the matchmaker.
+
+| Name | Value | Description |
+|------|-------|-------------|
+| `INITIALIZING` | `0` | Matchmaker is starting up. |
+| `READY` | `1` | Matchmaker is ready to accept connections and create rooms. |
+| `SHUTTING_DOWN` | `2` | Graceful shutdown is in progress. |
+
+```typescript
+import { matchMaker, MatchMakerState } from "@colyseus/core";
+
+if (matchMaker.state === MatchMakerState.READY) {
+  // safe to create rooms
+}
+```

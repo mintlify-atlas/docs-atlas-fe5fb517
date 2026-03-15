@@ -1,0 +1,225 @@
+---
+title: "TypeScript / JavaScript"
+description: "Use the Colyseus SDK in TypeScript, JavaScript, browser apps, and Node.js with full type safety."
+---
+
+## Installation
+
+<CodeGroup>
+
+```bash npm
+npm install @colyseus/sdk
+```
+
+```bash yarn
+yarn add @colyseus/sdk
+```
+
+```bash pnpm
+pnpm add @colyseus/sdk
+```
+
+</CodeGroup>
+
+For server-side state types, also install `@colyseus/schema`:
+
+```bash
+npm install @colyseus/schema
+```
+
+---
+
+## Basic connection
+
+```typescript
+import { Client } from "@colyseus/sdk";
+
+const client = new Client("ws://localhost:2567");
+
+const room = await client.joinOrCreate("game");
+
+room.onStateChange((state) => {
+  console.log("state:", state);
+});
+
+room.onMessage("move", (data) => {
+  console.log("move message:", data);
+});
+
+room.onError((code, message) => {
+  console.error("error:", code, message);
+});
+
+room.onLeave((code) => {
+  console.log("left with code:", code);
+});
+```
+
+---
+
+## Type-safe rooms with Schema state
+
+When you share your server-side Schema classes with the client, the room and its state are fully typed.
+
+### Define the state (shared between server and client)
+
+```typescript
+// shared/GameState.ts
+import { Schema, MapSchema, type } from "@colyseus/schema";
+
+export class Player extends Schema {
+  @type("number") x: number = 0;
+  @type("number") y: number = 0;
+  @type("string") name: string = "";
+}
+
+export class GameState extends Schema {
+  @type({ map: Player }) players = new MapSchema<Player>();
+  @type("number") tick: number = 0;
+}
+```
+
+### Join with the state type
+
+```typescript
+import { Client } from "@colyseus/sdk";
+import { GameState } from "./shared/GameState";
+
+const client = new Client("ws://localhost:2567");
+
+// Pass the root schema class as the third argument
+const room = await client.joinOrCreate<GameState>("game", {}, GameState);
+
+// room.state is fully typed as GameState
+console.log(room.state.tick);
+```
+
+### Using the `Room<T>` generic
+
+```typescript
+import { Room } from "@colyseus/sdk";
+import { GameState } from "./shared/GameState";
+
+function setupRoom(room: Room<any, GameState>) {
+  room.onStateChange((state: GameState) => {
+    state.players.forEach((player, sessionId) => {
+      console.log(sessionId, player.x, player.y);
+    });
+  });
+}
+```
+
+---
+
+## Listening to schema changes
+
+Use `getStateCallbacks` to listen to fine-grained property changes on Schema objects rather than receiving the full state on every update:
+
+```typescript
+import { Client, getStateCallbacks } from "@colyseus/sdk";
+import { GameState } from "./shared/GameState";
+
+const client = new Client("ws://localhost:2567");
+const room = await client.joinOrCreate<GameState>("game", {}, GameState);
+
+const $ = getStateCallbacks(room);
+
+// React when a player is added
+$.players.onAdd((player, sessionId) => {
+  console.log("player added:", sessionId);
+
+  // React to individual property changes on that player
+  $(player).x.onChange(() => updatePlayerX(sessionId, player.x));
+  $(player).y.onChange(() => updatePlayerY(sessionId, player.y));
+});
+
+// React when a player is removed
+$.players.onRemove((player, sessionId) => {
+  console.log("player removed:", sessionId);
+  removePlayerFromScene(sessionId);
+});
+```
+
+---
+
+## Sending messages
+
+```typescript
+// String type
+room.send("chat", { text: "Hello!" });
+
+// Numeric type
+room.send(1, { x: 10, y: 5 });
+
+// No payload
+room.send("ready");
+
+// Raw bytes
+room.sendBytes("customData", new Uint8Array([1, 2, 3]));
+```
+
+---
+
+## Reconnection
+
+```typescript
+// Store reconnection token after joining
+room.onStateChange.once(() => {
+  localStorage.setItem("reconnectionToken", room.reconnectionToken);
+});
+
+// On page reload
+const token = localStorage.getItem("reconnectionToken");
+if (token) {
+  try {
+    const room = await client.reconnect(token);
+    console.log("reconnected to", room.roomId);
+  } catch (e) {
+    localStorage.removeItem("reconnectionToken");
+  }
+}
+```
+
+---
+
+## React integration
+
+Install `@colyseus/react` for React-specific hooks:
+
+```bash
+npm install @colyseus/react
+```
+
+```tsx
+import { useColyseusRoom, useColyseusState } from "@colyseus/react";
+
+function Game() {
+  const room = useColyseusRoom();
+  const state = useColyseusState((state) => state);
+
+  return <pre>{JSON.stringify(state, null, 2)}</pre>;
+}
+```
+
+---
+
+## Browser CDN (no bundler)
+
+```html
+<script src="https://unpkg.com/@colyseus/sdk/dist/colyseus.js"></script>
+<script>
+  const client = new Colyseus.Client("ws://localhost:2567");
+
+  client.joinOrCreate("game").then((room) => {
+    room.onStateChange((state) => console.log(state));
+  });
+</script>
+```
+
+---
+
+## Platform considerations
+
+- In a browser, `new Client()` with no arguments defaults to the current page's origin (e.g. `ws://localhost:2567` during development).
+- In Node.js, you must always provide an explicit URL.
+- The Discord Embedded SDK is detected automatically; the URL builder is patched so WebSocket connections route through Discord's proxy.

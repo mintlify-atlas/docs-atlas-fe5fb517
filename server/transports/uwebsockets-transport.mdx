@@ -1,0 +1,116 @@
+---
+title: uWebSockets Transport
+description: High-performance WebSocket transport for Colyseus using the uWebSockets.js native addon.
+---
+
+`uWebSocketsTransport` wraps [uWebSockets.js](https://github.com/uNetworking/uWebSockets.js) — a C++ WebSocket server — to deliver higher throughput and lower memory usage than the default `ws`-based transport.
+
+## Installation
+
+<CodeGroup>
+```bash npm
+npm install @colyseus/uwebsockets-transport
+```
+```bash yarn
+yarn add @colyseus/uwebsockets-transport
+```
+```bash pnpm
+pnpm add @colyseus/uwebsockets-transport
+```
+</CodeGroup>
+
+`uWebSockets.js` ships as a prebuilt native binary. It supports Linux and macOS on x64 and ARM64. Windows is supported for development.
+
+## Basic usage
+
+```typescript
+import { Server } from "colyseus";
+import { uWebSocketsTransport } from "@colyseus/uwebsockets-transport";
+
+const gameServer = new Server({
+  transport: new uWebSocketsTransport(),
+});
+
+gameServer.define("game", GameRoom);
+gameServer.listen(2567);
+```
+
+## Options
+
+`uWebSocketsTransport` accepts all fields from uWebSockets.js's `WebSocketBehavior` (except `upgrade`, `open`, `pong`, `close`, and `message` which are managed internally).
+
+<ParamField path="maxPayloadLength" type="number" default="4096">
+  Maximum incoming message size in bytes. Defaults to 4 KB.
+</ParamField>
+
+<ParamField path="maxBackpressure" type="number" default="1048576">
+  Maximum amount of backpressure (in bytes) before a client is dropped. Defaults to 1 MB.
+</ParamField>
+
+<ParamField path="compression" type="number" default="DISABLED">
+  Per-message compression. Use `uWebSockets.SHARED_COMPRESSOR`, `uWebSockets.DEDICATED_COMPRESSOR`, or `uWebSockets.DISABLED` (default).
+</ParamField>
+
+<ParamField path="sendPingsAutomatically" type="boolean" default="true">
+  Let uWebSockets.js send WebSocket ping frames automatically.
+</ParamField>
+
+<ParamField path="idleTimeout" type="number">
+  Close connections that have been idle for this many seconds.
+</ParamField>
+
+## SSL configuration
+
+Pass `appOptions` as the second constructor argument to enable SSL. uWebSockets handles TLS termination natively without needing nginx in front:
+
+```typescript
+import { uWebSocketsTransport } from "@colyseus/uwebsockets-transport";
+
+const transport = new uWebSocketsTransport(
+  {
+    // WebSocket options (first arg)
+    maxPayloadLength: 16 * 1024,
+  },
+  {
+    // uWebSockets AppOptions (second arg) — SSL
+    key_file_name: "/etc/ssl/private/server.key",
+    cert_file_name: "/etc/ssl/certs/server.crt",
+    passphrase: "optional_passphrase",
+  }
+);
+```
+
+When `cert_file_name` and `key_file_name` are present, the transport creates a `uWebSockets.SSLApp` instead of a plain `uWebSockets.App`.
+
+## Express integration
+
+Use Express alongside uWebSockets via the `uwebsockets-express` adapter:
+
+```bash
+# Express v5
+npm install uwebsockets-express@^2.0.1
+
+# Express v4
+npm install uwebsockets-express@^1.4.1
+```
+
+```typescript
+import { Server } from "colyseus";
+import { uWebSocketsTransport } from "@colyseus/uwebsockets-transport";
+
+const transport = new uWebSocketsTransport();
+
+const gameServer = new Server({ transport, express: true });
+
+// Await because Express initialisation is async with uWebSockets
+const app = await transport.getExpressApp();
+app.get("/api/status", (req, res) => res.json({ ok: true }));
+
+gameServer.listen(2567);
+```
+
+## Performance notes
+
+- uWebSockets.js processes messages on the same thread as Node.js event loop, so CPU-heavy room logic still blocks it. Use worker threads for intensive computations.
+- The `uWebSocketsTransport` does not create an `http.Server`. HTTP routes are handled directly by the `uWebSockets.App`, making it incompatible with libraries that require a bare `http.Server` (e.g., socket.io).
+- Compression is disabled by default. Enable `SHARED_COMPRESSOR` to reduce bandwidth at the cost of some CPU.

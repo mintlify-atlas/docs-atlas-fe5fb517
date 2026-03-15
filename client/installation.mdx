@@ -1,0 +1,97 @@
+---
+title: "Installation"
+description: "Install the Colyseus client SDK for JavaScript/TypeScript, React, or download the SDK for your game engine."
+---
+
+## JavaScript / TypeScript
+
+Install `@colyseus/sdk` from npm:
+
+<CodeGroup>
+
+```bash npm
+npm install @colyseus/sdk
+```
+
+```bash yarn
+yarn add @colyseus/sdk
+```
+
+```bash pnpm
+pnpm add @colyseus/sdk
+```
+
+</CodeGroup>
+
+The current version is `0.17.x`. It requires Node.js 12 or higher.
+
+### React integration
+
+A dedicated React package provides hooks and context for Colyseus rooms:
+
+<CodeGroup>
+
+```bash npm
+npm install @colyseus/react
+```
+
+```bash yarn
+yarn add @colyseus/react
+```
+
+```bash pnpm
+pnpm add @colyseus/react
+```
+
+</CodeGroup>
+
+### CDN / browser (no bundler)
+
+For quick prototypes or plain HTML pages you can load the SDK directly from a CDN:
+
+```html
+<script src="https://unpkg.com/@colyseus/sdk/dist/colyseus.js"></script>
+<script>
+  const client = new Colyseus.Client("ws://localhost:2567");
+</script>
+```
+
+<Note>
+  The CDN build exposes all exports under the global `Colyseus` namespace.
+</Note>
+
+## Game engine SDKs
+
+| Platform | How to install |
+|---|---|
+| Unity | [Download `.unitypackage`](https://github.com/colyseus/colyseus-unity3d/releases/latest/download/Colyseus_Plugin.unitypackage) |
+| Godot | [Download GDExtension](https://github.com/colyseus/native-sdk/releases?q=godot+sdk&expanded=true) |
+| GameMaker | [Download extension](https://github.com/colyseus/native-sdk/releases?q=gamemaker+sdk&expanded=true) |
+| Defold | Add dependency in `game.project` — see [Defold guide](/client/platforms/defold) |
+| Construct 3 | [Download from Construct marketplace](https://www.construct.net/en/make-games/addons/111/colyseus-multiplayer-sdk) |
+| Haxe | `haxelib install colyseus` |
+
+See each platform's dedicated page for full setup instructions.
+
+<Steps>
+  <Step title="Install the package">
+    Run the install command above for your package manager, or download the appropriate SDK for your engine.
+  </Step>
+  <Step title="Create a Client">
+    Point the client at your server. During development this is typically `ws://localhost:2567`.
+
+    ```typescript
+    import { Client } from "@colyseus/sdk";
+
+    const client = new Client("ws://localhost:2567");
+    ```
+  </Step>
+  <Step title="Join a room">
+    Call one of the matchmaking methods. The returned `Room` object is your live connection.
+
+    ```typescript
+    const room = await client.joinOrCreate("my_room");
+    console.log("joined room:", room.roomId);
+    ```
+  </Step>
+</Steps>

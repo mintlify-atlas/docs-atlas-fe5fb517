@@ -1,0 +1,462 @@
+---
+title: Presence
+description: Complete reference for the Colyseus Presence interface — pub/sub, key-value storage, sets, hashes, and counters.
+---
+
+The `Presence` interface provides shared state and pub/sub messaging between server processes. It is used internally by the matchmaker for inter-process communication and is accessible to rooms via `this.presence`.
+
+```typescript
+// inside a Room
+async onCreate() {
+  await this.presence.subscribe("global_event", (data) => {
+    this.broadcast("event", data);
+  });
+}
+```
+
+---
+
+## Implementations
+
+<Tabs>
+  <Tab title="LocalPresence">
+    The default implementation. Stores all state in memory in the current process. Use this for single-process deployments.
+
+    ```typescript
+    import { defineServer, LocalPresence } from "@colyseus/core";
+
+    const server = defineServer({
+      presence: new LocalPresence(), // this is the default
+      rooms: { /* ... */ },
+    });
+    ```
+  </Tab>
+  <Tab title="RedisPresence">
+    A Redis-backed implementation for multi-process and multi-machine deployments. Requires `@colyseus/redis-presence`.
+
+    ```typescript
+    import { defineServer } from "@colyseus/core";
+    import { RedisPresence } from "@colyseus/redis-presence";
+
+    const server = defineServer({
+      presence: new RedisPresence({
+        host: "localhost",
+        port: 6379,
+      }),
+      rooms: { /* ... */ },
+    });
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+All presence subscriptions made through `this.presence` inside a room are automatically cleaned up when the room disposes. This is managed by the scoped presence wrapper.
+</Note>
+
+---
+
+## Pub/sub
+
+### `subscribe(topic, callback)`
+
+Subscribes to messages published on `topic`. The callback is called each time a message is published.
+
+```typescript
+await this.presence.subscribe("match_result", (data) => {
+  console.log("Result:", data);
+});
+```
+
+<ParamField path="topic" type="string" required>
+  Topic name to subscribe to.
+</ParamField>
+
+<ParamField path="callback" type="Function" required>
+  Function invoked with the published data.
+</ParamField>
+
+<ResponseField name="return" type="Promise<Presence>">
+  Returns the presence instance for chaining.
+</ResponseField>
+
+### `unsubscribe(topic, callback?)`
+
+Removes a subscription. If `callback` is omitted, all subscriptions on `topic` are removed.
+
+```typescript
+await this.presence.unsubscribe("match_result", myCallback);
+// or remove all listeners on topic:
+await this.presence.unsubscribe("match_result");
+```
+
+<ParamField path="topic" type="string" required>
+  Topic name.
+</ParamField>
+
+<ParamField path="callback" type="Function">
+  Specific callback to remove. Omit to remove all.
+</ParamField>
+
+### `publish(topic, data)`
+
+Publishes data to all subscribers of `topic`. With `RedisPresence`, this broadcasts across all processes.
+
+```typescript
+this.presence.publish("match_result", { winner: "player_1", score: 100 });
+```
+
+<ParamField path="topic" type="string" required>
+  Topic name.
+</ParamField>
+
+<ParamField path="data" type="any" required>
+  Data to publish to all subscribers.
+</ParamField>
+
+---
+
+## Key-value storage
+
+### `set(key, value)`
+
+Sets a key to hold a string value.
+
+```typescript
+this.presence.set("server_status", "online");
+```
+
+<ParamField path="key" type="string" required>
+  Key identifier.
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  String value to store.
+</ParamField>
+
+### `get(key)`
+
+Returns the value stored at `key`.
+
+```typescript
+const status = await this.presence.get("server_status");
+```
+
+<ParamField path="key" type="string" required>
+  Key identifier.
+</ParamField>
+
+<ResponseField name="return" type="string | number | undefined">
+  The stored value, or `undefined` if the key does not exist.
+</ResponseField>
+
+### `del(key)`
+
+Deletes a key and all associated data (string, set, and hash data).
+
+```typescript
+this.presence.del("server_status");
+```
+
+<ParamField path="key" type="string" required>
+  Key to delete.
+</ParamField>
+
+### `exists(key)`
+
+Returns `true` if the key exists.
+
+```typescript
+const exists = await this.presence.exists("server_status");
+```
+
+<ParamField path="key" type="string" required>
+  Key to check.
+</ParamField>
+
+<ResponseField name="return" type="Promise<boolean>">
+  `true` if the key exists in any storage bucket.
+</ResponseField>
+
+### `setex(key, value, seconds)`
+
+Sets a key with an automatic expiry.
+
+```typescript
+this.presence.setex("rate_limit:player_1", "1", 60);
+```
+
+<ParamField path="key" type="string" required>
+  Key identifier.
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  String value to store.
+</ParamField>
+
+<ParamField path="seconds" type="number" required>
+  Seconds until the key expires.
+</ParamField>
+
+### `expire(key, seconds)`
+
+Sets or resets the expiry timer on an existing key.
+
+```typescript
+this.presence.expire("session_token", 3600);
+```
+
+<ParamField path="key" type="string" required>
+  Key identifier.
+</ParamField>
+
+<ParamField path="seconds" type="number" required>
+  Seconds until expiry.
+</ParamField>
+
+---
+
+## Counters
+
+### `incr(key)`
+
+Increments the integer value at `key` by 1. If the key does not exist, it is initialized to `0` before incrementing.
+
+```typescript
+const count = await this.presence.incr("global_match_count");
+```
+
+<ParamField path="key" type="string" required>
+  Key holding an integer value.
+</ParamField>
+
+<ResponseField name="return" type="Promise<number>">
+  The new value after incrementing.
+</ResponseField>
+
+### `decr(key)`
+
+Decrements the integer value at `key` by 1.
+
+```typescript
+const count = await this.presence.decr("active_players");
+```
+
+<ParamField path="key" type="string" required>
+  Key holding an integer value.
+</ParamField>
+
+<ResponseField name="return" type="Promise<number>">
+  The new value after decrementing.
+</ResponseField>
+
+---
+
+## Hash methods
+
+### `hset(key, field, value)`
+
+Sets a field within a hash.
+
+```typescript
+await this.presence.hset("player:stats", "score", "1500");
+```
+
+<ParamField path="key" type="string" required>
+  Hash key.
+</ParamField>
+
+<ParamField path="field" type="string" required>
+  Field name within the hash.
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  String value to store.
+</ParamField>
+
+<ResponseField name="return" type="Promise<boolean>">
+  `true` if the field was set.
+</ResponseField>
+
+### `hget(key, field)`
+
+Returns the value of a field within a hash.
+
+```typescript
+const score = await this.presence.hget("player:stats", "score");
+```
+
+<ParamField path="key" type="string" required>
+  Hash key.
+</ParamField>
+
+<ParamField path="field" type="string" required>
+  Field name.
+</ParamField>
+
+<ResponseField name="return" type="Promise<string | null>">
+  The field value, or `null` if not found.
+</ResponseField>
+
+### `hgetall(key)`
+
+Returns all fields and values of a hash.
+
+```typescript
+const stats = await this.presence.hgetall("player:stats");
+// { score: "1500", level: "3" }
+```
+
+<ParamField path="key" type="string" required>
+  Hash key.
+</ParamField>
+
+<ResponseField name="return" type="Promise<Record<string, string>>">
+  All field/value pairs, or an empty object if the key does not exist.
+</ResponseField>
+
+### `hdel(key, field)`
+
+Removes a specific field from a hash.
+
+```typescript
+await this.presence.hdel("player:stats", "temporary_buff");
+```
+
+<ParamField path="key" type="string" required>
+  Hash key.
+</ParamField>
+
+<ParamField path="field" type="string" required>
+  Field to remove.
+</ParamField>
+
+<ResponseField name="return" type="Promise<boolean>">
+  `true` if the field existed and was removed.
+</ResponseField>
+
+---
+
+## Set methods
+
+### `sadd(key, value)`
+
+Adds a value to the set stored at `key`. Creates the set if it does not exist. Duplicate values are ignored.
+
+```typescript
+this.presence.sadd("online_players", client.sessionId);
+```
+
+<ParamField path="key" type="string" required>
+  Set key.
+</ParamField>
+
+<ParamField path="value" type="any" required>
+  Value to add.
+</ParamField>
+
+### `smembers(key)`
+
+Returns all members of the set.
+
+```typescript
+const players = await this.presence.smembers("online_players");
+```
+
+<ParamField path="key" type="string" required>
+  Set key.
+</ParamField>
+
+<ResponseField name="return" type="Promise<string[]>">
+  Array of all set members.
+</ResponseField>
+
+### `srem(key, value)`
+
+Removes a value from the set.
+
+```typescript
+this.presence.srem("online_players", client.sessionId);
+```
+
+<ParamField path="key" type="string" required>
+  Set key.
+</ParamField>
+
+<ParamField path="value" type="any" required>
+  Value to remove.
+</ParamField>
+
+### `sismember(key, field)`
+
+Returns `1` if the value is a member of the set, or `0` if not.
+
+```typescript
+const isMember = await this.presence.sismember("banned_players", userId);
+```
+
+<ParamField path="key" type="string" required>
+  Set key.
+</ParamField>
+
+<ParamField path="field" type="string" required>
+  Value to check.
+</ParamField>
+
+<ResponseField name="return" type="0 | 1">
+  `1` if the value is in the set, `0` otherwise.
+</ResponseField>
+
+### `scard(key)`
+
+Returns the number of elements in the set.
+
+```typescript
+const count = await this.presence.scard("online_players");
+```
+
+<ParamField path="key" type="string" required>
+  Set key.
+</ParamField>
+
+<ResponseField name="return" type="number">
+  The number of elements in the set.
+</ResponseField>
+
+---
+
+## List methods
+
+### `rpush(key, ...values)`
+
+Appends one or more values to the end of a list.
+
+```typescript
+await this.presence.rpush("event_log", JSON.stringify(event));
+```
+
+### `lpush(key, ...values)`
+
+Prepends one or more values to the beginning of a list.
+
+### `rpop(key)`
+
+Removes and returns the last element of the list.
+
+### `lpop(key)`
+
+Removes and returns the first element of the list.
+
+### `llen(key)`
+
+Returns the length of the list.
+
+### `brpop(...keys, timeoutInSeconds)`
+
+Blocking pop — waits up to `timeoutInSeconds` for an element to appear in any of the listed keys. Returns `[key, value]` or `null` on timeout.
+
+```typescript
+const result = await this.presence.brpop("job_queue", 10);
+if (result) {
+  const [key, value] = result;
+}
+```

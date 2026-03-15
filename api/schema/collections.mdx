@@ -1,0 +1,302 @@
+---
+title: Schema collections
+description: Reference for MapSchema, ArraySchema, and SetSchema — the synchronized collection types in @colyseus/schema.
+---
+
+Colyseus provides three synchronized collection types. Always use these instead of native JavaScript `Map`, `Array`, or `Set` for any state that needs to be sent to clients.
+
+```typescript
+import { MapSchema, ArraySchema, SetSchema } from "@colyseus/schema";
+```
+
+---
+
+## Why schema-aware collections?
+
+Native JavaScript collections (`Map`, `Array`, `Set`) are not observable. The Schema serializer cannot detect mutations in them and will not include their changes in patches.
+
+`MapSchema`, `ArraySchema`, and `SetSchema` use JavaScript `Proxy` to intercept mutations and record them for the next patch cycle. This means:
+
+- Any mutation (`set`, `push`, `delete`) is automatically tracked.
+- Only the changed entries are sent, not the entire collection.
+- Clients receive `onAdd`, `onChange`, and `onRemove` callbacks for individual items.
+
+---
+
+## `MapSchema<V>`
+
+A synchronized key-value map. Keys are always strings.
+
+```typescript
+class GameState extends Schema {
+  @type({ map: Player }) players = new MapSchema<Player>();
+}
+
+// In the room:
+this.state.players.set(client.sessionId, new Player());
+this.state.players.delete(client.sessionId);
+```
+
+### Methods
+
+<ResponseField name="set(key, value)" type="MapSchema<V>">
+  Sets the value for `key`. Creates the entry if it does not exist, or replaces it.
+
+  ```typescript
+  state.players.set("player_1", new Player());
+  ```
+</ResponseField>
+
+<ResponseField name="get(key)" type="V | undefined">
+  Returns the value stored at `key`, or `undefined`.
+
+  ```typescript
+  const player = state.players.get("player_1");
+  ```
+</ResponseField>
+
+<ResponseField name="delete(key)" type="boolean">
+  Removes the entry at `key`. Returns `true` if the entry existed.
+
+  ```typescript
+  state.players.delete("player_1");
+  ```
+</ResponseField>
+
+<ResponseField name="has(key)" type="boolean">
+  Returns `true` if the map contains an entry for `key`.
+
+  ```typescript
+  if (state.players.has("player_1")) { /* ... */ }
+  ```
+</ResponseField>
+
+<ResponseField name="forEach(callback)" type="void">
+  Iterates over all entries. Callback receives `(value, key, map)`.
+
+  ```typescript
+  state.players.forEach((player, id) => {
+    player.score += 10;
+  });
+  ```
+</ResponseField>
+
+<ResponseField name="entries()" type="IterableIterator<[string, V]>">
+  Returns an iterator over `[key, value]` pairs.
+</ResponseField>
+
+<ResponseField name="keys()" type="IterableIterator<string>">
+  Returns an iterator over all keys.
+</ResponseField>
+
+<ResponseField name="values()" type="IterableIterator<V>">
+  Returns an iterator over all values.
+</ResponseField>
+
+<ResponseField name="size" type="number">
+  The number of entries in the map.
+</ResponseField>
+
+<ResponseField name="clear()" type="void">
+  Removes all entries from the map.
+</ResponseField>
+
+---
+
+## `ArraySchema<V>`
+
+A synchronized array. Supports most standard `Array` methods.
+
+```typescript
+class GameState extends Schema {
+  @type({ array: "number" }) scores = new ArraySchema<number>();
+  @type({ array: Item }) inventory = new ArraySchema<Item>();
+}
+
+this.state.scores.push(100);
+this.state.scores.splice(0, 1);
+```
+
+### Commonly used methods
+
+<ResponseField name="push(...items)" type="number">
+  Appends items to the end of the array. Returns the new length.
+</ResponseField>
+
+<ResponseField name="pop()" type="V | undefined">
+  Removes and returns the last element.
+</ResponseField>
+
+<ResponseField name="shift()" type="V | undefined">
+  Removes and returns the first element.
+</ResponseField>
+
+<ResponseField name="unshift(...items)" type="number">
+  Prepends items to the beginning. Returns the new length.
+</ResponseField>
+
+<ResponseField name="splice(start, deleteCount?, ...items)" type="ArraySchema<V>">
+  Removes/replaces elements at `start`. Also accepts new items to insert.
+</ResponseField>
+
+<ResponseField name="indexOf(value)" type="number">
+  Returns the first index of `value`, or `-1`.
+</ResponseField>
+
+<ResponseField name="find(predicate)" type="V | undefined">
+  Returns the first element that satisfies `predicate`.
+</ResponseField>
+
+<ResponseField name="filter(predicate)" type="V[]">
+  Returns a plain array of elements that satisfy `predicate`.
+
+  <Warning>
+  `filter()` returns a native `Array`, not an `ArraySchema`. Do not assign it back to a Schema state field.
+  </Warning>
+</ResponseField>
+
+<ResponseField name="forEach(callback)" type="void">
+  Iterates over all elements. Callback receives `(value, index, array)`.
+</ResponseField>
+
+<ResponseField name="map(callback)" type="T[]">
+  Returns a plain mapped array.
+</ResponseField>
+
+<ResponseField name="sort(compareFn?)" type="ArraySchema<V>">
+  Sorts the array in place.
+</ResponseField>
+
+<ResponseField name="length" type="number">
+  Number of elements.
+</ResponseField>
+
+<ResponseField name="at(index)" type="V | undefined">
+  Returns the element at `index`. Negative indices count from the end.
+</ResponseField>
+
+---
+
+## `SetSchema<V>`
+
+A synchronized set of unique values. Suitable for primitive types and Schema instances.
+
+```typescript
+class GameState extends Schema {
+  @type({ set: "string" }) activePowerUps = new SetSchema<string>();
+}
+
+this.state.activePowerUps.add("shield");
+this.state.activePowerUps.delete("shield");
+```
+
+### Methods
+
+<ResponseField name="add(value)" type="SetSchema<V>">
+  Adds a value to the set. If the value already exists, it is ignored.
+</ResponseField>
+
+<ResponseField name="delete(value)" type="boolean">
+  Removes the value. Returns `true` if it existed.
+</ResponseField>
+
+<ResponseField name="has(value)" type="boolean">
+  Returns `true` if the value is in the set.
+</ResponseField>
+
+<ResponseField name="forEach(callback)" type="void">
+  Iterates over all values.
+</ResponseField>
+
+<ResponseField name="size" type="number">
+  The number of values in the set.
+</ResponseField>
+
+<ResponseField name="clear()" type="void">
+  Removes all values.
+</ResponseField>
+
+---
+
+## Client-side callbacks
+
+On the client side, you can listen for changes on individual collection items.
+
+<CodeGroup>
+
+```typescript JavaScript/TypeScript
+room.state.players.onAdd((player, key) => {
+  console.log("player added:", key, player);
+
+  player.onChange(() => {
+    // called when any field on this player changes
+    console.log("player changed:", player);
+  });
+});
+
+room.state.players.onRemove((player, key) => {
+  console.log("player removed:", key);
+});
+
+// For ArraySchema and MapSchema:
+room.state.scores.onChange((value, index) => {
+  console.log(`score[${index}] changed to`, value);
+});
+```
+
+```csharp C#
+State.players.OnAdd += (key, player) => {
+    Debug.Log($"Player added: {key}");
+};
+
+State.players.OnRemove += (key, player) => {
+    Debug.Log($"Player removed: {key}");
+};
+```
+
+```gdscript GDScript
+state.players.on_add(func(player, key):
+    print("Player added: ", key)
+)
+```
+
+</CodeGroup>
+
+### `onAdd(callback)`
+
+Fired when a new entry is added to the collection.
+
+<ParamField path="callback" type="(item: V, key: string | number) => void" required>
+  Receives the new item and its key (string for `MapSchema`, number index for `ArraySchema`).
+</ParamField>
+
+### `onRemove(callback)`
+
+Fired when an entry is removed from the collection.
+
+<ParamField path="callback" type="(item: V, key: string | number) => void" required>
+  Receives the removed item and its key.
+</ParamField>
+
+### `onChange(callback)` (ArraySchema / MapSchema)
+
+Fired when the value of an existing entry changes (primitives or replaced Schema references).
+
+<ParamField path="callback" type="(value: V, key: string | number) => void" required>
+  Receives the new value and its key.
+</ParamField>
+
+---
+
+## Performance considerations
+
+- **Prefer `MapSchema` over `ArraySchema`** when you need to look up entities by ID. Lookups in `MapSchema` are O(1); finding an element in `ArraySchema` by a field value requires iterating the array.
+- **Use primitive collection types** (`{ array: "float32" }`) instead of wrapping each value in a `Schema` when the values don't need individual `onChange` callbacks. Primitive arrays are more compact on the wire.
+- **Avoid large collections with `@filterChildren`**. The filter callback runs once per entry per client per patch cycle — an O(n × clients) operation.
+- **`SetSchema` is ideal for small sets of primitive tags** where you only need membership checks, not indexed access.
+
+---
+
+## `CollectionSchema` base class
+
+`MapSchema`, `ArraySchema`, and `SetSchema` all extend `CollectionSchema`. You generally do not need to interact with `CollectionSchema` directly, but it provides the underlying change tracking mechanism shared by all collection types.

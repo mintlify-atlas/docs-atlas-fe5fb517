@@ -1,0 +1,251 @@
+---
+title: "Authentication (Client)"
+description: "Manage user authentication with email/password, anonymous sign-in, OAuth providers, and persistent auth tokens."
+---
+
+The `client.auth` module handles user authentication against your Colyseus server's built-in auth endpoints. The auth token is automatically attached to all matchmaking and HTTP requests once set.
+
+## Overview
+
+```typescript
+import { Client } from "@colyseus/sdk";
+
+const client = new Client("ws://localhost:2567");
+
+// Sign in
+const { user, token } = await client.auth.signInWithEmailAndPassword(
+  "user@example.com",
+  "password123"
+);
+console.log("signed in as:", user);
+
+// The token is now set automatically on all subsequent requests
+const room = await client.joinOrCreate("game"); // token sent as _authToken
+```
+
+---
+
+## `client.auth.token`
+
+The current authentication token. Reading returns the stored token; writing sets it directly and updates the underlying HTTP client.
+
+```typescript
+// Read
+console.log(client.auth.token);
+
+// Write (e.g. restore from storage)
+client.auth.token = "eyJhbGci...";
+```
+
+The token is stored in `localStorage` (or an equivalent storage for your platform) under the key `colyseus-auth-token` and is restored automatically on page reload.
+
+---
+
+## Methods
+
+### `signInWithEmailAndPassword()`
+
+Authenticate with an email address and password.
+
+```typescript
+const { user, token } = await client.auth.signInWithEmailAndPassword(
+  "user@example.com",
+  "password123"
+);
+```
+
+<ParamField path="email" type="string" required>
+  The user's email address.
+</ParamField>
+
+<ParamField path="password" type="string" required>
+  The user's password.
+</ParamField>
+
+Returns `Promise<AuthResponse>` containing `{ user, token }`.
+
+---
+
+### `registerWithEmailAndPassword()`
+
+Create a new user account with email and password.
+
+```typescript
+const { user, token } = await client.auth.registerWithEmailAndPassword(
+  "newuser@example.com",
+  "password123"
+);
+```
+
+<ParamField path="email" type="string" required>
+  The new user's email address.
+</ParamField>
+
+<ParamField path="password" type="string" required>
+  The new user's password.
+</ParamField>
+
+<ParamField path="options" type="object">
+  Optional additional fields forwarded to the server registration handler.
+</ParamField>
+
+---
+
+### `signInAnonymously()`
+
+Create or resume an anonymous session. Useful for guest users.
+
+```typescript
+const { user, token } = await client.auth.signInAnonymously();
+```
+
+<ParamField path="options" type="object">
+  Optional additional fields forwarded to the server handler.
+</ParamField>
+
+---
+
+### `signInWithProvider()`
+
+Authenticate via an OAuth provider by opening a popup window. The popup navigates to your server's OAuth route and posts the result back.
+
+```typescript
+// Sign in with Google
+const { user, token } = await client.auth.signInWithProvider("google");
+
+// Sign in with GitHub
+const { user, token } = await client.auth.signInWithProvider("github");
+```
+
+<ParamField path="providerName" type="string" required>
+  The OAuth provider name (e.g. `"google"`, `"github"`, `"discord"`). Must match a configured provider on your server.
+</ParamField>
+
+<ParamField path="settings.width" type="number" default="480">
+  Popup window width in pixels.
+</ParamField>
+
+<ParamField path="settings.height" type="number" default="768">
+  Popup window height in pixels.
+</ParamField>
+
+<ParamField path="settings.prefix" type="string" default="/auth/provider">
+  Custom URL prefix for the OAuth route.
+</ParamField>
+
+<Note>
+  `signInWithProvider()` uses `window.open()` and requires a browser environment. It is not available in native game engine SDKs.
+</Note>
+
+---
+
+### `signOut()`
+
+Clear the current authentication state and remove the token from storage.
+
+```typescript
+await client.auth.signOut();
+// client.auth.token is now undefined
+```
+
+---
+
+### `sendPasswordResetEmail()`
+
+Send a password reset email to the given address.
+
+```typescript
+await client.auth.sendPasswordResetEmail("user@example.com");
+```
+
+<ParamField path="email" type="string" required>
+  The email address to send the reset link to.
+</ParamField>
+
+---
+
+### `getUserData()`
+
+Fetch the current user's data from the server using the stored token.
+
+```typescript
+const { user } = await client.auth.getUserData();
+console.log("current user:", user);
+```
+
+Throws an error if no token is set.
+
+---
+
+### `onChange(callback)`
+
+Listen for authentication state changes. The callback fires immediately with the current state and again whenever the user signs in or out.
+
+```typescript
+const unbind = client.auth.onChange(({ user, token }) => {
+  if (user) {
+    console.log("logged in:", user);
+  } else {
+    console.log("logged out");
+  }
+});
+
+// Stop listening
+unbind();
+```
+
+On first call, `onChange` triggers a `getUserData()` request to validate and restore the persisted session. If the token is missing or expired, the callback fires with `{ user: null, token: undefined }`.
+
+<ParamField path="callback" type="(response: AuthResponse) => void" required>
+  Called with `{ user, token }` on every auth state change. `user` is `null` when signed out.
+</ParamField>
+
+---
+
+## Token lifecycle
+
+1. On page load the SDK reads `colyseus-auth-token` from `localStorage` and sets `client.auth.token`.
+2. All matchmaking requests include the token as a `_authToken` query parameter.
+3. All `client.http` requests include the token as a `Bearer` authorization header.
+4. After `signOut()` the token is removed from storage and cleared from the HTTP client.
+
+---
+
+## TypeScript generics
+
+The auth module is generic over your user data type:
+
+```typescript
+interface MyUser {
+  id: string;
+  username: string;
+  avatarUrl: string;
+}
+
+const client = new Client<any, MyUser>("ws://localhost:2567");
+
+// user is typed as MyUser
+const { user } = await client.auth.signInWithEmailAndPassword(email, password);
+console.log(user.username);
+```
+
+---
+
+## Example: auth gate before matchmaking
+
+```typescript
+import { Client } from "@colyseus/sdk";
+
+const client = new Client("wss://game.example.com");
+
+client.auth.onChange(async ({ user }) => {
+  if (user) {
+    // User is authenticated — enter matchmaking
+    const room = await client.joinOrCreate("lobby");
+    startGame(room);
+  } else {
+    // Show login screen
+    showLoginUI();
+  }
+});
+```

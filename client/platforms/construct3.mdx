@@ -1,0 +1,103 @@
+---
+title: "Construct 3"
+description: "Use the Colyseus addon in Construct 3. Download from the marketplace, add it to your project, and connect to a room visually or with JavaScript."
+---
+
+## Installation
+
+<Steps>
+  <Step title="Download the addon">
+    Get the Colyseus addon from the Construct marketplace:
+
+    ```
+    https://www.construct.net/en/make-games/addons/111/colyseus-multiplayer-sdk
+    ```
+
+    Click **Install** in the marketplace page and follow the prompts, or download the `.c3addon` file manually.
+  </Step>
+  <Step title="Add to your project">
+    In Construct 3, open your project. Go to **Menu → View → Addon Manager** and install the downloaded addon. After installing, right-click your **Layout** and choose **Add object type…** then select **Colyseus**.
+  </Step>
+  <Step title="Configure the server URL">
+    Select the Colyseus object in the layout. In the **Properties** panel, set the **Endpoint** to your server URL (e.g. `ws://localhost:2567`).
+  </Step>
+</Steps>
+
+---
+
+## Connecting via the event sheet
+
+Construct 3 exposes Colyseus through an action/condition/expression (ACE) interface.
+
+**Actions:**
+- `Colyseus: Join or create room "game"`
+- `Colyseus: Send message type "move" with data ...`
+- `Colyseus: Leave room`
+
+**Conditions:**
+- `On room joined`
+- `On room error`
+- `On message type "chat"`
+- `On state change`
+
+**Expressions:**
+- `Colyseus.RoomId` — current room ID
+- `Colyseus.SessionId` — current session ID
+- `Colyseus.State("players")` — read state property
+
+---
+
+## JavaScript scripting
+
+You can also use the SDK directly from a Construct 3 script block:
+
+```javascript
+// scripts/game.js
+const colyseusInstance = runtime.objects.Colyseus.getFirstInstance();
+
+// Access the underlying SDK
+const client = colyseusInstance.client;
+const room = await client.joinOrCreate("game");
+
+room.onStateChange((state) => {
+    runtime.callFunction("UpdateState", JSON.stringify(state));
+});
+
+room.onMessage("chat", (message) => {
+    console.log("chat:", message.text);
+});
+
+room.send("move", { x: 100, y: 200 });
+```
+
+---
+
+## Event sheet example
+
+A typical event sheet flow:
+
+```
+[Event] On start of layout
+  [Action] Colyseus: Join or create room "lobby"
+
+[Event] Colyseus: On room joined
+  [Action] Text: Set text to "Room ID: " & Colyseus.RoomId
+
+[Event] Colyseus: On state change
+  [Action] Text: Set text to Colyseus.State("tick")
+
+[Event] Colyseus: On message type "chat"
+  [Action] Text: Append Colyseus.MessagePayload("text") & newline
+
+[Event] Key Down (Space)
+  [Action] Colyseus: Send message type "jump" with data ""
+```
+
+---
+
+## Platform considerations
+
+- The addon works in Construct 3 r300 and later.
+- The addon bundles a copy of `@colyseus/sdk` — you do not need to install it separately.
+- For preview mode the endpoint should be `ws://localhost:2567`. For exported HTML5 builds, change this to your production `wss://` endpoint.
+- To use schema-based state deserialization, access the underlying SDK instance via JavaScript and pass the Schema class as described in the [TypeScript guide](/client/platforms/typescript).

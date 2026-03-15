@@ -1,0 +1,201 @@
+---
+title: JWT Authentication
+description: Sign and verify JSON Web Tokens for email/password authentication in Colyseus.
+---
+
+The `JWT` helper wraps the `jsonwebtoken` library and provides `sign`, `verify`, and `decode` methods used throughout `@colyseus/auth`. You can also use it directly in your own routes.
+
+## Configuration
+
+Set the JWT secret either through the environment variable or by assigning `JWT.settings.secret` before the server starts.
+
+```typescript
+import { JWT } from "@colyseus/auth";
+
+// Option 1: environment variable (recommended)
+// JWT_SECRET=my_super_secret node server.js
+
+// Option 2: explicit assignment
+JWT.settings.secret = "my_super_secret";
+
+// Change signing algorithm (default: HS256)
+JWT.settings.verify.algorithms = ["HS512"];
+```
+
+<Warning>
+  Always set `JWT_SECRET` (or `JWT.settings.secret`) in production. The server will print an error and refuse to sign tokens if no secret is configured.
+</Warning>
+
+## API reference
+
+### `JWT.sign(payload, options?)`
+
+Encodes `payload` into a signed JWT string.
+
+```typescript
+const token = await JWT.sign({ userId: 42, role: "admin" });
+
+// With expiry
+const token = await JWT.sign({ email: user.email }, { expiresIn: "30m" });
+```
+
+<ParamField path="payload" type="object" required>
+  Data to encode. Avoid storing sensitive fields (passwords, secrets) here.
+</ParamField>
+
+<ParamField path="options" type="SignOptions">
+  Standard `jsonwebtoken` sign options, e.g. `{ expiresIn: "7d" }`.
+</ParamField>
+
+### `JWT.verify(token, options?)`
+
+Verifies the token signature and returns the decoded payload. Throws if the token is invalid or expired.
+
+```typescript
+try {
+  const payload = await JWT.verify<{ userId: number }>(token);
+  console.log(payload.userId);
+} catch (e) {
+  console.error("Invalid token", e.message);
+}
+```
+
+### `JWT.decode(token)`
+
+Decodes without verifying the signature. Use only when you trust the source and need to inspect claims quickly.
+
+```typescript
+const data = JWT.decode(token);
+```
+
+### `JWT.middleware(options?)`
+
+Returns an Express/better-call middleware that validates the `Authorization: Bearer <token>` header and attaches the decoded payload to `req.auth` (Express) or `ctx.context.auth` (better-call).
+
+```typescript
+import { auth } from "@colyseus/auth";
+
+// Protect an Express route
+app.get("/profile", auth.middleware(), (req, res) => {
+  res.json(req.auth);
+});
+```
+
+## Hash utilities
+
+`Hash` is used internally by `@colyseus/auth` to store passwords securely. The default algorithm is **scrypt**.
+
+```typescript
+import { Hash } from "@colyseus/auth";
+
+// Hash a password
+const hashed = await Hash.make("mysecret");
+
+// Change algorithm
+Hash.algorithm = "sha1"; // also available: "scrypt" (default)
+```
+
+<ParamField path="Hash.algorithm" type="scrypt | sha1 | string">
+  Hashing algorithm to use. Defaults to `"scrypt"`. The `AUTH_SALT` environment variable is used as the salt.
+</ParamField>
+
+<Tip>
+  The SHA-1 algorithm is provided for compatibility. Prefer the default **scrypt** for new projects.
+</Tip>
+
+## Full email/password flow
+
+Below is a complete example integrating registration, login, and room join.
+
+<Steps>
+  <Step title="Set up auth routes">
+    ```typescript
+    import { Server } from "colyseus";
+    import { auth, JWT } from "@colyseus/auth";
+
+    const gameServer = new Server();
+
+    gameServer.express.use("/auth", auth.routes({
+      onFindUserByEmail: async (email) =>
+        db.users.findOne({ email }),
+
+      onRegisterWithEmailAndPassword: async (email, password, options) => {
+        // `password` is already hashed by auth before this callback
+        return db.users.create({ email, password });
+      },
+    }));
+    ```
+  </Step>
+
+  <Step title="Register a new user (client-side)">
+    ```typescript
+    const res = await fetch("/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: "player@example.com",
+        password: "secret123",
+      }),
+    });
+    const { user, token } = await res.json();
+    localStorage.setItem("token", token);
+    ```
+  </Step>
+
+  <Step title="Login (client-side)">
+    ```typescript
+    const res = await fetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "player@example.com", password: "secret123" }),
+    });
+    const { token } = await res.json();
+    localStorage.setItem("token", token);
+    ```
+  </Step>
+
+  <Step title="Join a room with the token">
+    ```typescript
+    import Colyseus from "colyseus.js";
+
+    const client = new Colyseus.Client("ws://localhost:2567");
+    const room = await client.joinOrCreate("game", {}, {
+      // The SDK sends this as `Authorization: Bearer <token>`
+      // or as the `_authToken` query parameter
+    });
+
+    // Pass the token manually if needed:
+    const room = await client.joinOrCreate("game", {
+      token: localStorage.getItem("token"),
+    });
+    ```
+  </Step>
+
+  <Step title="Verify the token in the room">
+    ```typescript
+    import { Room, Client } from "colyseus";
+    import { JWT } from "@colyseus/auth";
+
+    export class GameRoom extends Room {
+      async onAuth(client: Client, options: any, context: any) {
+        // Throws automatically if token is invalid or expired
+        return await JWT.verify(context.token);
+      }
+
+      onJoin(client: Client) {
+        console.log("Player joined:", client.auth.email);
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+## Callbacks reference
+
+<ParamField path="RegisterWithEmailAndPasswordCallback" type="(email: string, password: string, options: T & MayHaveUpgradeToken) => Promise<unknown>">
+  Called during `POST /auth/register`. The `password` parameter has already been hashed. The `options.upgradingToken` field is set when converting an anonymous session to a full account.
+</ParamField>
+
+<ParamField path="FindUserByEmailCallback" type="(email: string) => Promise<{ password: string }>">  
+  Must return a user object that contains at least a `password` field. Throw or return `null`/`undefined` when the user does not exist.
+</ParamField>

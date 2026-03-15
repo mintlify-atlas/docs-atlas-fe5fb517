@@ -1,0 +1,146 @@
+---
+title: "Architecture Overview"
+description: "Understand Colyseus's authoritative server model, Room lifecycle, MatchMaker, Presence, and Driver."
+---
+
+## Authoritative server model
+
+Colyseus enforces an **authoritative server** architecture: all game logic executes on the server, and clients receive a read-only view of the resulting state. Clients send **input messages**; the server processes them, mutates state, and broadcasts delta-compressed binary patches back to every connected client.
+
+This design makes cheating structurally difficult — clients never control authoritative data.
+
+## Data flow
+
+```
+┌─────────┐   input message    ┌───────────────────────────────────────┐
+│         │ ─────────────────► │  Transport  (WebSocket / uWS / Bun)   │
+│ Client  │                    │      │                                 │
+│  (SDK)  │                    │      ▼                                 │
+│         │                    │    Room                                │
+│         │                    │      │  mutates Schema state           │
+│         │                    │      ▼                                 │
+│         │   state patches    │  SchemaSerializer → binary delta       │
+│         │ ◄───────────────── │      │  broadcast to all clients       │
+└─────────┘   (binary, delta)  └───────────────────────────────────────┘
+```
+
+1. The client SDK sends a message over the WebSocket connection.
+2. The **Transport** layer receives the raw bytes and routes them to the correct `Room` instance.
+3. The `Room`'s `onMessage` handler (or `messages` map) runs the game logic and mutates `this.state`.
+4. At the configured `patchRate` (default 50 ms / 20 fps) the **SchemaSerializer** computes a binary delta and broadcasts it to all clients.
+5. The client SDK applies the patch and fires reactive callbacks registered with `getStateCallbacks`.
+
+## Room lifecycle
+
+Each `Room` instance goes through a well-defined lifecycle:
+
+```
+onCreate  →  onAuth  →  onJoin  →  [ messages / simulation ]  →  onLeave  →  onDispose
+```
+
+| Hook | When it runs |
+|------|--------------|
+| `onCreate(options)` | Once, when the MatchMaker creates the room. Set up state, simulation intervals, and message handlers here. |
+| `onAuth(client, options, context)` | Before `onJoin`, for every connecting client. Throw or return a falsy value to reject the connection. |
+| `onJoin(client, options, auth)` | After authentication succeeds. Add the client to your state. |
+| `onMessage(type, handler)` / `messages` | On each message sent by a client during the session. |
+| `onLeave(client, code)` | When a client disconnects. Call `allowReconnection(client, seconds)` here to keep the seat reserved. |
+| `onDispose()` | When the last client leaves (if `autoDispose` is `true`) or when `disconnect()` is called manually. Clean up timers and external resources. |
+
+### Additional hooks
+
+| Hook | Purpose |
+|------|---------|
+| `onDrop(client, code)` | Called when a client drops unexpectedly (before `onLeave`). |
+| `onReconnect(client)` | Called when a client reconnects after `allowReconnection`. |
+| `onBeforePatch(state)` | Called before each state patch is broadcast. |
+| `onBeforeShutdown()` | Called during graceful process shutdown. Use `clock.setTimeout` to delay final disconnect. |
+| `onUncaughtException(error, methodName)` | Optional catch-all for lifecycle exceptions. |
+
+## The MatchMaker
+
+The **MatchMaker** is the subsystem that decides which `Room` instance a connecting client should join. It maintains an in-memory (or Redis-backed) registry of live rooms and their metadata.
+
+Key responsibilities:
+
+- **Room creation** — when no suitable room exists, the MatchMaker spawns a new one via `onCreate`.
+- **Room lookup** — `joinOrCreate`, `join`, `create`, and `joinById` all query the MatchMaker.
+- **Seat reservation** — a seat is reserved for a client for `seatReservationTimeout` seconds (default 15 s, configurable via `COLYSEUS_SEAT_RESERVATION_TIME`) before `onJoin` is confirmed.
+- **Filtering and sorting** — `defineRoom(MyRoom).filterBy(["level"]).sortBy({ clients: -1 })` narrows which room a client lands in.
+- **Lock management** — rooms lock automatically when `maxClients` is reached and unlock when a client leaves.
+
+```typescript
+import { defineServer, defineRoom } from "@colyseus/core";
+import { GameRoom } from "./GameRoom.js";
+
+const server = defineServer({
+  rooms: {
+    // Register the room type under the public name "game"
+    game: defineRoom(GameRoom)
+      .filterBy(["level"])   // only match rooms with the same "level" option
+      .sortBy({ clients: -1 }), // prefer the fullest room
+  },
+});
+
+server.listen(2567);
+```
+
+## Presence
+
+**Presence** is an abstraction over a key-value store used for cross-process communication and pub/sub. It allows multiple Colyseus processes to share matchmaking state.
+
+| Implementation | Package | Use case |
+|----------------|---------|----------|
+| `LocalPresence` | `@colyseus/core` (built-in) | Single-process development and small deployments |
+| `RedisPresence` | `@colyseus/redis-presence` | Multi-process / multi-server horizontal scaling |
+
+You access presence inside a room via `this.presence`:
+
+```typescript
+async onCreate() {
+  // Subscribe to a channel from another room or process
+  await this.presence.subscribe("global:events", (data) => {
+    this.broadcast("event", data);
+  });
+}
+```
+
+## Driver
+
+The **Driver** is the storage backend for the MatchMaker's room registry (the list of live rooms, their client counts, metadata, etc.).
+
+| Implementation | Package | Use case |
+|----------------|---------|----------|
+| `LocalDriver` | `@colyseus/core` (built-in) | Single-process; data lives in memory |
+| `RedisDriver` | `@colyseus/redis-driver` | Multi-process; rooms visible across all nodes |
+| `PostgresDriver` | `@colyseus/drizzle-driver` | Persistent matchmaking storage |
+
+Configure the driver when constructing the server:
+
+```typescript
+import { defineServer, LocalDriver } from "@colyseus/core";
+import { RedisDriver } from "@colyseus/redis-driver";
+
+const server = defineServer({
+  rooms: { /* ... */ },
+  driver: new RedisDriver(process.env.REDIS_URI),
+});
+```
+
+<Note>
+  When using `@colyseus/tools` and deploying to **Colyseus Cloud**, the correct
+  `RedisDriver` and `RedisPresence` are configured automatically based on the
+  number of CPU cores and the presence of a `REDIS_URI` environment variable.
+</Note>
+
+## Transport
+
+The Transport layer handles raw network I/O. Colyseus ships three options:
+
+| Transport | Package | Notes |
+|-----------|---------|-------|
+| `WebSocketTransport` | `@colyseus/ws-transport` | Default; uses the `ws` library on Node.js |
+| `uWebSocketsTransport` | `@colyseus/uwebsockets-transport` | High-performance C++ WebSocket server |
+| `BunWebSockets` | `@colyseus/bun-websockets` | Native Bun WebSocket transport |
+
+The transport is auto-detected at runtime: Bun environments use `BunWebSockets`, all others fall back to `WebSocketTransport`. Override with `initializeTransport` in `@colyseus/tools` or pass `transport` directly to `defineServer`.

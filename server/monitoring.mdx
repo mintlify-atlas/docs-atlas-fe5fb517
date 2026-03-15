@@ -1,0 +1,129 @@
+---
+title: Monitoring
+description: Mount the Colyseus Monitor dashboard to inspect rooms, clients, and server health in real time.
+---
+
+The `@colyseus/monitor` package provides a web-based dashboard that shows all active rooms, connected clients, memory usage, and CPU usage across your Colyseus server.
+
+## Installation
+
+<CodeGroup>
+```bash npm
+npm install @colyseus/monitor
+```
+```bash yarn
+yarn add @colyseus/monitor
+```
+```bash pnpm
+pnpm add @colyseus/monitor
+```
+</CodeGroup>
+
+## Setup
+
+Mount the monitor as an Express router:
+
+```typescript
+import { Server } from "colyseus";
+import { monitor } from "@colyseus/monitor";
+
+const gameServer = new Server({ express: true });
+const app = gameServer.transport.getExpressApp();
+
+// Mount at /colyseus
+app.use("/colyseus", monitor());
+
+gameServer.listen(2567);
+```
+
+Open `http://localhost:2567/colyseus` in your browser to view the dashboard.
+
+## Securing the monitor
+
+<Warning>
+  The monitor exposes internal server state. Always protect it in production with authentication.
+</Warning>
+
+Use HTTP Basic Auth with the `express-basic-auth` package:
+
+```typescript
+import basicAuth from "express-basic-auth";
+import { monitor } from "@colyseus/monitor";
+
+const auth = basicAuth({
+  users: { admin: process.env.MONITOR_PASSWORD ?? "secret" },
+  challenge: true,
+});
+
+app.use("/colyseus", auth, monitor());
+```
+
+Or use your own middleware — any Express middleware placed before `monitor()` will guard access.
+
+## Dashboard columns
+
+By default the dashboard shows:
+
+| Column | Description |
+|--------|-------------|
+| `roomId` | Unique room identifier |
+| `name` | Room handler name |
+| `clients` | Current number of connected clients |
+| `maxClients` | Maximum allowed clients |
+| `locked` | Whether the room is locked (no new joins) |
+| `elapsedTime` | Time since the room was created |
+
+`publicAddress` is added automatically when it is present on any room.
+
+### Custom columns
+
+Pass a `columns` array to `monitor()` to customise what is displayed:
+
+```typescript
+app.use("/colyseus", monitor({
+  columns: [
+    "roomId",
+    "name",
+    "clients",
+    "maxClients",
+    "locked",
+    "elapsedTime",
+    { metadata: "mode" },  // show room.metadata.mode
+    "processId",
+  ],
+}));
+```
+
+<ParamField path="columns" type="Array<string | { metadata: string }>">
+  Controls which columns appear in the room list table. Standard column names are string literals. To expose a metadata field, use the object syntax `{ metadata: 'fieldName' }`.
+</ParamField>
+
+## What the API exposes
+
+The monitor serves a single-page React app backed by a small Express API:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /colyseus/api/` | Returns room list, connection count, CPU %, and memory usage |
+| `GET /colyseus/api/room?roomId=<id>` | Returns inspection data for a single room |
+| `GET /colyseus/api/room/call?roomId=<id>&method=<m>&args=<json>` | Calls a method on a room remotely |
+
+The API is consumed by the dashboard frontend but can also be queried directly for custom monitoring scripts.
+
+## Server metrics
+
+The API response from `GET /api/` includes:
+
+```json
+{
+  "rooms": [...],
+  "connections": 142,
+  "cpu": 12.5,
+  "memory": {
+    "totalMemMb": 2048,
+    "usedMemMb": 512
+  }
+}
+```
+
+CPU and memory are read using [node-os-utils](https://github.com/ben-bradshaw/node-os-utils) and reflect the entire host machine, not just the Node.js process.

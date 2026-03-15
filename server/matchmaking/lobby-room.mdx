@@ -1,0 +1,175 @@
+---
+title: 'LobbyRoom'
+description: 'Built-in room that streams real-time room-list updates to connected clients.'
+keywords: ['LobbyRoom', 'room list', 'lobby', 'real-time', 'matchmaking']
+---
+
+`LobbyRoom` is a built-in Colyseus room that maintains a live list of all public, non-unlisted room instances and pushes incremental updates to every connected client. Clients never need to poll — they receive additions, updates, and removals as they happen.
+
+## How it works
+
+On creation, `LobbyRoom` subscribes to the internal lobby pub/sub channel via `subscribeLobby`. Any time a room that has **realtime listing enabled** is created, updated, locked, or disposed, the lobby channel receives an event. `LobbyRoom` then fans the event out to all connected clients, filtered by each client's current filter preferences.
+
+The `LobbyRoom` instance itself is marked as `unlisted` so it never appears in its own listing.
+
+## Server setup
+
+<Steps>
+  <Step title="Import and define LobbyRoom">
+    Register `LobbyRoom` under any name you choose:
+
+    ```typescript
+    import { LobbyRoom } from '@colyseus/core';
+
+    app.define('lobby', LobbyRoom);
+    ```
+  </Step>
+
+  <Step title="Enable realtime listing on game rooms">
+    Call `.enableRealtimeListing()` on each room definition whose updates should be broadcast to lobby clients:
+
+    ```typescript
+    app.define('game_room', GameRoom)
+      .enableRealtimeListing();
+    ```
+
+    Without `.enableRealtimeListing()`, changes to a room are not published to the lobby channel and `LobbyRoom` clients will not see updates for that room type.
+  </Step>
+</Steps>
+
+<Note>
+  `LobbyRoom` only shows rooms where `private: false` and `unlisted: false`. Private and unlisted rooms are excluded from the initial query and from incremental updates.
+</Note>
+
+## Client-side integration
+
+<Tabs>
+  <Tab title="TypeScript / JavaScript">
+    ```typescript
+    import { Client } from 'colyseus.js';
+
+    const client = new Client('ws://localhost:2567');
+    const lobby = await client.joinOrCreate('lobby');
+
+    // Full room list snapshot on join
+    lobby.onMessage('rooms', (rooms) => {
+      console.log('available rooms:', rooms);
+    });
+
+    // A room was added or updated
+    lobby.onMessage('+', ([roomId, roomData]) => {
+      console.log('room added/updated:', roomId, roomData);
+    });
+
+    // A room was removed
+    lobby.onMessage('-', (roomId) => {
+      console.log('room removed:', roomId);
+    });
+    ```
+  </Tab>
+  <Tab title="C#">
+    ```csharp
+    var client = new Client("ws://localhost:2567");
+    var lobby = await client.JoinOrCreateAsync("lobby");
+
+    lobby.OnMessage<RoomAvailable[]>("rooms", (rooms) => {
+        Debug.Log($"Got {rooms.Length} rooms");
+    });
+
+    lobby.OnMessage<object[]>("+", (args) => {
+        string roomId = (string)args[0];
+        Debug.Log($"Room added/updated: {roomId}");
+    });
+
+    lobby.OnMessage<string>("-", (roomId) => {
+        Debug.Log($"Room removed: {roomId}");
+    });
+    ```
+  </Tab>
+</Tabs>
+
+## Client messages
+
+### Receiving messages
+
+| Message type | Payload | Description |
+|---|---|---|
+| `rooms` | `IRoomCache[]` | Sent once on join — the full list of matching rooms |
+| `+` | `[roomId, IRoomCache]` | A room was added or its data changed |
+| `-` | `string` (roomId) | A room was removed or disposed |
+
+### Sending messages
+
+| Message type | Payload | Description |
+|---|---|---|
+| `filter` | `{ name?: string, metadata?: object }` | Narrow the rooms the client receives |
+
+## Client-side filtering
+
+Each client connected to `LobbyRoom` can subscribe to a subset of rooms by sending a `filter` message. The filter supports matching by room name and by metadata fields:
+
+```typescript
+// Show only 'ranked_game' rooms in region 'eu-west'
+lobby.send('filter', {
+  name: 'ranked_game',
+  metadata: { region: 'eu-west' },
+});
+```
+
+After the filter is applied the client immediately receives a new `rooms` snapshot containing only matching rooms. Subsequent `+` and `-` messages respect the filter.
+
+<Note>
+  Filtering is evaluated server-side per client. Clients receive only the deltas that match their current filter. Removing the filter (by sending `{}`) restores the full list.
+</Note>
+
+## LobbyOptions
+
+Options can be passed when joining to set an initial filter:
+
+```typescript
+const lobby = await client.joinOrCreate('lobby', {
+  filter: {
+    name: 'game_room',
+    metadata: { difficulty: 'hard' },
+  },
+});
+```
+
+<ParamField path="filter.name" type="string">
+  Restrict the room list to rooms with this exact name.
+</ParamField>
+
+<ParamField path="filter.metadata" type="object">
+  Key-value pairs that must all match the room's metadata. Partial match — only listed keys are compared.
+</ParamField>
+
+## Generics and type safety
+
+`LobbyRoom` accepts a metadata type parameter so the room list is typed:
+
+```typescript
+interface GameRoomMeta {
+  map: string;
+  difficulty: string;
+}
+
+// All IRoomCache entries will have metadata typed as GameRoomMeta
+const lobby = await client.joinOrCreate<LobbyRoom<GameRoomMeta>>('lobby');
+```
+
+## Full server example
+
+```typescript
+import { Server, LobbyRoom } from '@colyseus/core';
+import { GameRoom } from './GameRoom';
+
+const app = new Server();
+
+app.define('lobby', LobbyRoom);
+
+app.define('game_room', GameRoom)
+  .filterBy(['mode'])
+  .enableRealtimeListing();
+
+app.listen(2567);
+```

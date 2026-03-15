@@ -1,0 +1,108 @@
+---
+title: Bun WebSockets Transport
+description: Run Colyseus with the Bun runtime using native Bun WebSocket support.
+---
+
+`BunWebSockets` uses Bun's built-in high-performance WebSocket server instead of the Node.js `ws` package or uWebSockets.js. It is the correct transport when your project runs under the [Bun](https://bun.sh) JavaScript runtime.
+
+## Installation
+
+<CodeGroup>
+```bash bun
+bun add @colyseus/bun-websockets
+```
+```bash npm
+npm install @colyseus/bun-websockets
+```
+</CodeGroup>
+
+<Note>
+  This package must be run with the **Bun** runtime. It will not work with Node.js because it depends on the `Bun` global and Bun's `ServerWebSocket` API.
+</Note>
+
+## Usage
+
+```typescript
+import { Server } from "colyseus";
+import { BunWebSockets } from "@colyseus/bun-websockets";
+import { GameRoom } from "./GameRoom";
+
+const gameServer = new Server({
+  transport: new BunWebSockets(),
+});
+
+gameServer.define("game", GameRoom);
+gameServer.listen(2567);
+```
+
+Run your server with Bun:
+
+```bash
+bun run src/index.ts
+```
+
+## Options
+
+`BunWebSockets` accepts Bun's `WebSocketHandler` options (excluding `message`, `open`, `drain`, `close`, `ping`, and `pong` which are managed internally).
+
+<ParamField path="maxPayloadLength" type="number" default="4096">
+  Maximum incoming WebSocket message size in bytes. Defaults to 4 KB.
+</ParamField>
+
+<ParamField path="idleTimeout" type="number">
+  Close idle connections after this many seconds.
+</ParamField>
+
+<ParamField path="backpressureLimit" type="number">
+  Pause incoming data when the backpressure buffer reaches this size.
+</ParamField>
+
+<ParamField path="closeOnBackpressureLimit" type="boolean">
+  Close the connection when the backpressure limit is reached instead of pausing.
+</ParamField>
+
+<ParamField path="perMessageDeflate" type="boolean">
+  Enable per-message deflate compression.
+</ParamField>
+
+## Express integration
+
+`BunWebSockets` integrates with Express via the `bun-serve-express` adapter (installed automatically as a dependency):
+
+```typescript
+import express from "express";
+import { Server } from "colyseus";
+import { BunWebSockets } from "@colyseus/bun-websockets";
+
+const transport = new BunWebSockets();
+const gameServer = new Server({ transport, express: true });
+
+const app = transport.getExpressApp();
+app.use(express.json());
+app.get("/api/health", (req, res) => res.json({ ok: true }));
+
+gameServer.listen(2567);
+```
+
+## How it works
+
+Bun's `Bun.serve()` handles both HTTP and WebSocket connections in the same server. `BunWebSockets` calls `Bun.serve()` with a `fetch` handler for HTTP and a `websocket` handler for WebSocket connections:
+
+- **WebSocket upgrade** — `server.upgrade(req)` is attempted first. If successful, the connection is handed off to the `websocket` handler.
+- **HTTP routing** — Requests that are not WebSocket upgrades are handled by the Colyseus router, then fall through to Express if a route is not found in the router.
+
+## Deploying with Bun
+
+```dockerfile
+FROM oven/bun:1
+WORKDIR /app
+COPY package.json bun.lockb ./
+RUN bun install --frozen-lockfile
+COPY . .
+EXPOSE 2567
+CMD ["bun", "run", "src/index.ts"]
+```
+
+<Warning>
+  Bun compatibility with the broader Node.js ecosystem (native addons, some npm packages) is still evolving. Test all dependencies under Bun before deploying to production.
+</Warning>

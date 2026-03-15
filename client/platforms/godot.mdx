@@ -1,0 +1,146 @@
+---
+title: "Godot"
+description: "Use the Colyseus GDExtension in Godot 4. Connect to a room, receive state updates, and exchange messages with GDScript or C#."
+---
+
+## Installation
+
+<Steps>
+  <Step title="Download the GDExtension">
+    Download the latest Godot SDK release from GitHub:
+
+    ```
+    https://github.com/colyseus/native-sdk/releases?q=godot+sdk&expanded=true
+    ```
+
+    Extract the archive into your Godot project's `addons/colyseus/` directory.
+  </Step>
+  <Step title="Enable the extension">
+    Open your project in Godot 4. Go to **Project → Project Settings → Plugins** and enable the **Colyseus** plugin.
+  </Step>
+  <Step title="Add the ColyseusClient node">
+    Add a `ColyseusClient` node to your scene tree. Configure the server endpoint in the Inspector, or set it in code.
+  </Step>
+</Steps>
+
+---
+
+## Connecting to a server (GDScript)
+
+```gdscript
+extends Node
+
+var client: ColyseusClient
+var room: ColyseusRoom
+
+func _ready():
+    client = ColyseusClient.new("ws://localhost:2567")
+
+func join_game():
+    room = await client.join_or_create("game")
+    if room:
+        print("Joined room: ", room.room_id)
+        room.on_state_change.connect(_on_state_change)
+        room.on_message.connect(_on_message)
+        room.on_error.connect(_on_error)
+        room.on_leave.connect(_on_leave)
+
+func _on_state_change(state):
+    print("State updated: ", state)
+
+func _on_message(type, payload):
+    print("Message received - type: ", type, " payload: ", payload)
+
+func _on_error(code, message):
+    push_error("Room error [%d]: %s" % [code, message])
+
+func _on_leave(code):
+    print("Left room with code: ", code)
+```
+
+---
+
+## Sending messages
+
+```gdscript
+# Send a message with a dictionary payload
+room.send("move", { "x": player.position.x, "y": player.position.y })
+
+# Send without a payload
+room.send("ready")
+```
+
+---
+
+## Reading state
+
+```gdscript
+func _on_state_change(state):
+    # Access state properties directly
+    for session_id in state.players:
+        var player = state.players[session_id]
+        update_player_position(session_id, player.x, player.y)
+```
+
+For fine-grained callbacks on Schema collections:
+
+```gdscript
+func _ready():
+    room = await client.join_or_create("game")
+    room.state.players.on_add = func(player, session_id):
+        print("Player joined: ", session_id)
+    room.state.players.on_remove = func(player, session_id):
+        print("Player left: ", session_id)
+```
+
+---
+
+## Reconnection
+
+```gdscript
+# Save token after joining
+func _on_state_change_first(state):
+    ProjectSettings.set_setting("colyseus/reconnection_token", room.reconnection_token)
+    ProjectSettings.save()
+
+# Reconnect later
+func try_reconnect():
+    var token = ProjectSettings.get_setting("colyseus/reconnection_token", "")
+    if token != "":
+        room = await client.reconnect(token)
+        if room:
+            print("Reconnected to ", room.room_id)
+```
+
+---
+
+## C# in Godot 4
+
+The GDExtension also exposes C# bindings:
+
+```csharp
+using Godot;
+using Colyseus;
+
+public partial class GameManager : Node
+{
+    private ColyseusClient _client;
+    private ColyseusRoom _room;
+
+    public override async void _Ready()
+    {
+        _client = new ColyseusClient("ws://localhost:2567");
+        _room = await _client.JoinOrCreate("game");
+        GD.Print("Joined: " + _room.RoomId);
+    }
+}
+```
+
+---
+
+## Platform considerations
+
+- The Godot SDK targets Godot 4.x. For Godot 3.x, check older releases in the native-sdk repository.
+- The extension ships precompiled binaries for Windows, macOS, Linux, Android, and iOS.
+- For HTML5 exports, ensure the Godot export template includes WebSocket support.
+- Schema state classes can be generated from your server project using the Colyseus schema code generator.

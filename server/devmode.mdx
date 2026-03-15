@@ -1,0 +1,131 @@
+---
+title: Dev Mode
+description: Enable hot-reload with room state restoration during development.
+---
+
+Dev Mode speeds up the development loop by restoring active rooms and their state when the server restarts. Connected clients are automatically re-connected without losing their in-game position.
+
+## Enabling Dev Mode
+
+<Tabs>
+  <Tab title="Server option">
+    ```typescript
+    import { Server } from "colyseus";
+
+    const gameServer = new Server({
+      devMode: true,
+    });
+    ```
+  </Tab>
+  <Tab title="Environment variable">
+    ```bash
+    COLYSEUS_DEVMODE=true node dist/index.js
+    ```
+  </Tab>
+</Tabs>
+
+With a file watcher like `ts-node-dev` or `nodemon`, the server restarts on code changes and Dev Mode restores rooms automatically:
+
+```json
+{
+  "scripts": {
+    "dev": "ts-node-dev --respawn src/index.ts"
+  }
+}
+```
+
+## How it works
+
+<Steps>
+  <Step title="Cache phase (on server shutdown)">
+    Before the process exits, `DevMode` iterates all active rooms and calls `room.onCacheRoom()` if defined. The room's serialised state and connected client session IDs are written to the presence layer.
+  </Step>
+
+  <Step title="Restore phase (on next startup)">
+    When the server starts with Dev Mode enabled, it reads the cached room history from presence, re-creates each room with the original `clientOptions`, restores the `@colyseus/schema` state via `.restore()`, and reserves seats for all previously connected clients.
+  </Step>
+
+  <Step title="Client reconnect">
+    The Colyseus client SDK automatically detects that the server restarted and uses the saved `reconnectionToken` to re-join the restored room. The client resumes from where it left off.
+  </Step>
+</Steps>
+
+## Lifecycle hooks
+
+### `onCacheRoom()`
+
+Return any custom data you want to persist across restarts. This data is passed back to `onRestoreRoom` on the next startup.
+
+```typescript
+import { Room } from "colyseus";
+
+export class GameRoom extends Room {
+  gameTimer = 0;
+
+  onCacheRoom() {
+    // Return arbitrary serialisable data
+    return {
+      gameTimer: this.gameTimer,
+      customFlag: true,
+    };
+  }
+}
+```
+
+### `onRestoreRoom(cache)`
+
+Called after the room is re-created and state is restored. Receives the object returned by `onCacheRoom`.
+
+```typescript
+export class GameRoom extends Room {
+  gameTimer = 0;
+
+  onRestoreRoom(cache: { gameTimer: number; customFlag: boolean }) {
+    this.gameTimer = cache.gameTimer;
+    console.log("Room restored with timer:", this.gameTimer);
+  }
+}
+```
+
+## State restoration
+
+Dev Mode uses `@colyseus/schema`'s `.restore()` method to re-apply the previously serialised state. This works automatically for any `Schema`-based state — including nested `MapSchema`, `ArraySchema`, `SetSchema`, and `CollectionSchema`.
+
+```typescript
+import { Schema, type, MapSchema } from "@colyseus/schema";
+
+class Player extends Schema {
+  @type("string") name: string;
+  @type("number") score: number = 0;
+}
+
+class GameState extends Schema {
+  @type({ map: Player }) players = new MapSchema<Player>();
+}
+
+export class GameRoom extends Room<GameState> {
+  onCreate() {
+    this.setState(new GameState());
+  }
+  // State is restored automatically on dev-mode restart
+}
+```
+
+## Cache file
+
+Dev Mode writes a `.devmode.json` file in the project root to persist presence data between restarts when `LocalPresence` is in use. This file is auto-generated and should be added to `.gitignore`:
+
+```gitignore
+.devmode.json
+```
+
+## Limitations
+
+<Warning>
+  Dev Mode is for **development only**. Do not enable it in production.
+</Warning>
+
+- State restoration uses JSON serialisation. Functions, class instances, and non-serialisable values in state are lost on restart.
+- Clients that disconnect before the restart completes will not be restored.
+- Dev Mode increases startup time proportionally to the number of rooms being restored.
+- Only the schema state is restored automatically. Any non-schema in-memory data (timers, intervals, external connections) must be manually re-initialised in `onRestoreRoom`.

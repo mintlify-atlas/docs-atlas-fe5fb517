@@ -1,0 +1,178 @@
+---
+title: "Unity"
+description: "Use the Colyseus C# SDK in Unity. Download the .unitypackage, connect to a room, and synchronize game state."
+---
+
+## Installation
+
+<Steps>
+  <Step title="Download the Unity package">
+    Download the latest `Colyseus_Plugin.unitypackage` from GitHub Releases:
+
+    ```
+    https://github.com/colyseus/colyseus-unity3d/releases/latest/download/Colyseus_Plugin.unitypackage
+    ```
+  </Step>
+  <Step title="Import into Unity">
+    In the Unity Editor, go to **Assets → Import Package → Custom Package…** and select the downloaded file. Import all assets.
+  </Step>
+  <Step title="Add the ColyseusManager to your scene">
+    Add the `ColyseusManager` prefab (or component) to a GameObject in your scene. It initializes the SDK and persists across scene loads.
+  </Step>
+</Steps>
+
+---
+
+## Connecting to a server
+
+```csharp
+using Colyseus;
+using UnityEngine;
+
+public class GameManager : MonoBehaviour
+{
+    private ColyseusClient client;
+    private ColyseusRoom<GameState> room;
+
+    async void Start()
+    {
+        client = new ColyseusClient("ws://localhost:2567");
+
+        try
+        {
+            room = await client.JoinOrCreate<GameState>("game");
+            Debug.Log("Joined room: " + room.RoomId);
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError("Failed to join room: " + e.Message);
+        }
+    }
+
+    void OnDestroy()
+    {
+        room?.Leave();
+    }
+}
+```
+
+---
+
+## Receiving state changes
+
+```csharp
+room.OnStateChange += OnStateChange;
+
+void OnStateChange(GameState state, bool isFirstState)
+{
+    if (isFirstState)
+    {
+        Debug.Log("Initial state received");
+    }
+
+    // Update scene from state
+    foreach (var entry in state.players)
+    {
+        UpdatePlayer(entry.Key, entry.Value);
+    }
+}
+```
+
+For fine-grained property tracking, use the schema callbacks:
+
+```csharp
+room.State.players.OnAdd((sessionId, player) =>
+{
+    Debug.Log("Player joined: " + sessionId);
+    player.OnChange += (changes) =>
+    {
+        Debug.Log("Player changed: " + sessionId);
+    };
+});
+
+room.State.players.OnRemove((sessionId, player) =>
+{
+    Debug.Log("Player left: " + sessionId);
+});
+```
+
+---
+
+## Sending messages
+
+```csharp
+// Send a message with a dictionary payload
+await room.Send("move", new Dictionary<string, object>
+{
+    { "x", transform.position.x },
+    { "y", transform.position.y }
+});
+
+// Send a message with a typed object
+await room.Send("attack", new AttackMessage { targetId = "abc" });
+```
+
+---
+
+## Receiving messages
+
+```csharp
+room.OnMessage<MoveMessage>("move", (message) =>
+{
+    Debug.Log("Move received: " + message.direction);
+});
+
+// Catch-all handler
+room.OnMessage<MessageWrapper>("*", (type, message) =>
+{
+    Debug.Log("Message type: " + type);
+});
+```
+
+---
+
+## Error and disconnect handling
+
+```csharp
+room.OnError += (code, message) =>
+{
+    Debug.LogError($"Room error [{code}]: {message}");
+};
+
+room.OnLeave += (code) =>
+{
+    Debug.Log("Left room with code: " + code);
+};
+```
+
+---
+
+## Reconnection
+
+```csharp
+// Save the reconnection token
+PlayerPrefs.SetString("ReconnectionToken", room.ReconnectionToken);
+
+// Reconnect later
+string token = PlayerPrefs.GetString("ReconnectionToken", null);
+if (!string.IsNullOrEmpty(token))
+{
+    try
+    {
+        room = await client.Reconnect<GameState>(token);
+    }
+    catch
+    {
+        PlayerPrefs.DeleteKey("ReconnectionToken");
+    }
+}
+```
+
+---
+
+## Platform considerations
+
+- The Unity SDK targets Unity 2020.3 LTS and later.
+- Use `async/await` with UnityMainThreadDispatcher or coroutines to update GameObjects from callbacks (Unity's API is not thread-safe).
+- For WebGL builds, the SDK automatically uses the browser's WebSocket implementation.
+- The C# Schema classes must match the server-side definitions. Use the Colyseus schema code generator to generate them from your server project.

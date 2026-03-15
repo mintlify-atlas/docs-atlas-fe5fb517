@@ -1,0 +1,221 @@
+---
+title: "Client"
+description: "The server-side Client interface: properties, methods, and usage inside Room lifecycle hooks."
+---
+
+A `Client` instance is the server-side handle for a single connected player. You receive `Client` objects in `onJoin`, `onLeave`, `onDrop`, `onReconnect`, and every `onMessage` callback. They are also available via `this.clients` inside a room.
+
+<Note>
+Do not confuse the server-side `Client` with the client-side SDK `Client`. The server-side `Client` represents a transport connection. It is not synchronized to the browser automatically—use `this.state` for that.
+</Note>
+
+## Properties
+
+<ParamField path="sessionId" type="string">
+  Unique identifier for this connection session. Each time a player connects (including after a reconnection) they receive a new `sessionId`.
+
+  ```typescript
+  onJoin(client: Client) {
+    console.log("session:", client.sessionId);
+  }
+  ```
+</ParamField>
+
+<ParamField path="reconnectionToken" type="string">
+  Private token used to authenticate a reconnection attempt. On reconnect, the client SDK sends this token back and Colyseus matches it against the reserved seat.
+
+  <Warning>
+  Never expose `reconnectionToken` to untrusted parties. It grants the ability to take over a player's session.
+  </Warning>
+</ParamField>
+
+<ParamField path="auth" type="any">
+  The value returned by `onAuth()`. Available throughout the room lifecycle after `onJoin` has been called.
+
+  ```typescript
+  async onAuth(client: Client, options: { token: string }) {
+    return await verifyToken(options.token); // stored as client.auth
+  }
+
+  onJoin(client: Client) {
+    console.log("authenticated user:", client.auth.userId);
+  }
+  ```
+</ParamField>
+
+<ParamField path="userData" type="any">
+  Arbitrary server-side data you can attach to a connection. Unlike `auth`, there is no built-in population—you set it yourself. It is never sent to the client.
+
+  ```typescript
+  onJoin(client: Client) {
+    client.userData = {
+      joinedAt: Date.now(),
+      score: 0,
+    };
+  }
+  ```
+</ParamField>
+
+<ParamField path="state" type="ClientState">
+  Current connection state. One of the `ClientState` enum values (see below).
+</ParamField>
+
+<ParamField path="readyState" type="number">
+  Raw WebSocket ready state integer. Prefer `client.state` for most use cases.
+</ParamField>
+
+## `ClientState` enum
+
+| Value | Meaning |
+|---|---|
+| `JOINING` (0) | WebSocket connected; `onJoin` has not completed yet |
+| `JOINED` (1) | Client fully joined; `onJoin` resolved successfully |
+| `RECONNECTING` (2) | A reconnection is in progress |
+| `RECONNECTED` (3) | Client successfully reconnected |
+| `LEAVING` (4) | Client is in the process of leaving |
+| `CLOSED` (5) | Connection closed |
+
+```typescript
+import { ClientState } from "@colyseus/core";
+
+onMessage("ping", (client) => {
+  if (client.state === ClientState.JOINED) {
+    client.send("pong");
+  }
+});
+```
+
+## Methods
+
+### `client.send(type, message?, options?)`
+
+Send a typed message to this specific client. Messages are encoded with MsgPack.
+
+```typescript
+// Send a string-keyed message
+client.send("scored", { points: 10 });
+
+// Send a numeric-keyed message
+client.send(1, { x: 42, y: 99 });
+
+// Send after the next state patch is broadcast
+client.send("ready", {}, { afterNextPatch: true });
+```
+
+When you use the `RoomOptions` type parameter to declare message types, `send` is fully type-safe:
+
+```typescript
+type MyMessages = {
+  scored: { points: number };
+  chat: { text: string };
+};
+
+class GameRoom extends Room<{ client: Client<{ messages: MyMessages }> }> {
+  onJoin(client: Client<{ messages: MyMessages }>) {
+    // TypeScript knows the shape of each message type
+    client.send("scored", { points: 0 });
+  }
+}
+```
+
+### `client.sendBytes(type, bytes, options?)`
+
+Send raw bytes to the client, skipping MsgPack encoding.
+
+```typescript
+const buffer = encodeCustomFormat(data);
+client.sendBytes("custom", buffer);
+```
+
+### `client.leave(code?, data?)`
+
+Disconnect this client. The WebSocket close code defaults to `1000`. Use Colyseus `CloseCode` constants for semantic codes.
+
+```typescript
+import { CloseCode } from "@colyseus/shared-types";
+
+// Polite disconnect
+client.leave();
+
+// Disconnect with a reason
+client.leave(CloseCode.WITH_ERROR, "Kicked for cheating");
+```
+
+### `client.error(code, message?)`
+
+Triggers the `onError` callback on the client SDK without closing the connection.
+
+```typescript
+client.error(400, "Invalid move");
+```
+
+### `client.raw(bytes, options?, callback?)`
+
+Send raw pre-encoded bytes directly to the client's transport socket. Intended for internal use or advanced custom protocols.
+
+## Usage examples
+
+### Storing per-client data
+
+```typescript
+interface PlayerSession {
+  joinedAt: number;
+  score: number;
+  team: "red" | "blue";
+}
+
+class GameRoom extends Room {
+  onJoin(client: Client) {
+    client.userData = {
+      joinedAt: Date.now(),
+      score: 0,
+      team: this.assignTeam(),
+    } satisfies PlayerSession;
+  }
+
+  onMessage("score", (client) => {
+    client.userData.score += 1;
+    this.broadcast("leaderboard", this.buildLeaderboard());
+  });
+}
+```
+
+### Sending messages to a specific client
+
+```typescript
+onMessage("private_msg", (sender, data: { to: string; text: string }) => {
+  const target = this.clients.getById(data.to);
+  if (target) {
+    target.send("private_msg", {
+      from: sender.sessionId,
+      text: data.text,
+    });
+  } else {
+    sender.error(404, "Player not found");
+  }
+});
+```
+
+### Kicking a client
+
+```typescript
+onMessage("report", (reporter, data: { sessionId: string }) => {
+  if (this.isBanned(data.sessionId)) {
+    const target = this.clients.getById(data.sessionId);
+    target?.leave(CloseCode.WITH_ERROR, "Banned");
+  }
+});
+```
+
+### Iterating all clients
+
+```typescript
+onBeforePatch(state: GameState) {
+  // Send a personal notification to each client
+  for (const client of this.clients) {
+    if (state.events.has(client.sessionId)) {
+      client.send("personal_event", state.events.get(client.sessionId));
+    }
+  }
+}
+```

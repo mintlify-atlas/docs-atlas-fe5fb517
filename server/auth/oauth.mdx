@@ -1,0 +1,189 @@
+---
+title: OAuth
+description: Add social login with 150+ OAuth providers to your Colyseus server.
+---
+
+`@colyseus/auth` bundles the [grant](https://github.com/simov/grant) OAuth library so you can add social login with providers like GitHub, Google, Discord, and [150+ others](https://github.com/simov/grant#supported-providers) without extra dependencies.
+
+## How it works
+
+1. Your client opens a popup to `/auth/provider/<providerId>`.
+2. The user approves permissions on the provider's site.
+3. grant handles the OAuth callback and calls your `onOAuthProviderCallback`.
+4. Your callback persists the user and returns a user object.
+5. `@colyseus/auth` generates a JWT and posts it back to the opener via `window.postMessage`.
+6. The client stores the token and uses it to join rooms.
+
+## Setup
+
+<Steps>
+  <Step title="Add a provider">
+    ```typescript
+    import { auth } from "@colyseus/auth";
+
+    // GitHub
+    auth.oauth.addProvider("github", {
+      key: process.env.GITHUB_CLIENT_ID,
+      secret: process.env.GITHUB_CLIENT_SECRET,
+      scope: ["user:email"],
+    });
+
+    // Google
+    auth.oauth.addProvider("google", {
+      key: process.env.GOOGLE_CLIENT_ID,
+      secret: process.env.GOOGLE_CLIENT_SECRET,
+      scope: ["profile", "email"],
+      nonce: true, // required for OpenID Connect
+    });
+    ```
+  </Step>
+
+  <Step title="Register the callback and mount the router">
+    ```typescript
+    import { Server } from "colyseus";
+    import { auth } from "@colyseus/auth";
+
+    const gameServer = new Server();
+
+    gameServer.express.use("/auth", auth.routes({
+      onFindUserByEmail: async (email) => db.users.findOne({ email }),
+      onRegisterWithEmailAndPassword: async (email, password) => db.users.create({ email, password }),
+
+      // Called after every successful OAuth flow
+      onOAuthProviderCallback: async (data, provider) => {
+        const profile = data.profile;
+        const email = profile.email || profile.login + "@github.example";
+
+        let user = await db.users.findOne({ email });
+        if (!user) {
+          user = await db.users.create({
+            email,
+            provider,
+            providerId: profile.id,
+            displayName: profile.name || profile.login,
+          });
+        }
+        return user; // becomes the JWT payload
+      },
+    }));
+    ```
+
+    <Note>
+      `SESSION_SECRET` must be set in your environment for the `express-session` middleware used internally by grant.
+    </Note>
+  </Step>
+
+  <Step title="Trigger OAuth from the client">
+    ```typescript
+    function loginWithGitHub() {
+      const popup = window.open(
+        "/auth/provider/github",
+        "oauth",
+        "width=600,height=700"
+      );
+
+      window.addEventListener("message", async (event) => {
+        if (event.data?.token) {
+          const token = event.data.token;
+          localStorage.setItem("token", token);
+          popup.close();
+
+          // Join a room with the token
+          const room = await client.joinOrCreate("game", { token });
+        } else if (event.data?.error) {
+          console.error("OAuth error:", event.data.error);
+        }
+      });
+    }
+    ```
+  </Step>
+</Steps>
+
+## `auth.oauth.addProvider()`
+
+```typescript
+auth.oauth.addProvider(providerId: OAuthProviderName, config: OAuthProviderConfig)
+```
+
+<ParamField path="providerId" type="OAuthProviderName" required>
+  One of the 150+ supported provider identifiers. Examples: `"github"`, `"google"`, `"discord"`, `"facebook"`, `"twitter"`, `"apple"`, `"microsoft"`, `"twitch"`.
+</ParamField>
+
+<ParamField path="config.key" type="string" required>
+  The `client_id` (OAuth 2) or `consumer_key` (OAuth 1) of your app.
+</ParamField>
+
+<ParamField path="config.secret" type="string" required>
+  The `client_secret` or `consumer_secret`.
+</ParamField>
+
+<ParamField path="config.scope" type="string[]">
+  OAuth scopes to request, e.g. `["user:email"]` for GitHub.
+</ParamField>
+
+<ParamField path="config.nonce" type="boolean">
+  Generate a random nonce string. Required for OpenID Connect providers (Google, Apple, etc.).
+</ParamField>
+
+<ParamField path="config.custom_params" type="object">
+  Extra authorization parameters to append to the redirect URL.
+</ParamField>
+
+<ParamField path="config.response" type="Array<'tokens' | 'raw' | 'jwt' | 'profile'>">
+  Control which fields are included in the grant session response. Defaults to `["tokens", "raw", "profile"]`.
+</ParamField>
+
+## `OAuthProviderCallback` type
+
+```typescript
+type OAuthProviderCallback = (
+  data: GrantSession['response'] & { upgradingToken?: JwtPayload },
+  provider: OAuthProviderName
+) => Promise<unknown>;
+```
+
+The `data` object contains:
+
+| Field | Description |
+|-------|-------------|
+| `data.profile` | Normalised profile from the provider (name, email, id, …) |
+| `data.access_token` | OAuth access token |
+| `data.raw` | Raw response from the provider's token endpoint |
+| `data.upgradingToken` | Present when upgrading an anonymous session to a social login |
+
+Whatever your callback returns is signed into the JWT token. Avoid including sensitive fields.
+
+## Upgrading anonymous sessions
+
+If a user started as anonymous and later decides to link a social account, pass their existing token in the popup URL:
+
+```typescript
+const popup = window.open(
+  `/auth/provider/github?token=${localStorage.getItem("token")}`,
+  "oauth",
+  "width=600,height=700"
+);
+```
+
+Inside your callback, `data.upgradingToken` will contain the decoded anonymous token so you can merge the two accounts.
+
+## Using Redis for OAuth sessions
+
+With `RedisPresence`, grant automatically stores OAuth sessions in Redis rather than memory:
+
+```typescript
+import { Server } from "colyseus";
+import { RedisPresence } from "@colyseus/redis-presence";
+
+const gameServer = new Server({
+  presence: new RedisPresence(),
+});
+```
+
+When `RedisPresence` is detected, `@colyseus/auth` creates a `connect-redis` store automatically — no extra configuration needed.
+
+## Available providers
+
+Any of the providers listed in [grant's documentation](https://github.com/simov/grant#supported-providers) can be used with `auth.oauth.addProvider()`. Common examples:
+
+`github` · `google` · `discord` · `facebook` · `twitter` · `apple` · `microsoft` · `twitch` · `slack` · `spotify` · `reddit` · `linkedin` · `gitlab` · `bitbucket` · `amazon` · `dropbox` · `paypal`

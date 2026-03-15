@@ -1,0 +1,165 @@
+---
+title: 'RelayRoom'
+description: 'Built-in room that relays messages between clients without requiring custom server logic.'
+keywords: ['RelayRoom', 'relay', 'peer-to-peer', 'broadcast', 'matchmaking']
+---
+
+`RelayRoom` is a built-in Colyseus room that forwards every message sent by one client to all other clients in the same room. No custom server logic is required — the room acts as a transparent relay layer.
+
+It is ideal for prototyping, simple peer-to-peer-style games, or any scenario where the authoritative game logic runs on the clients rather than the server.
+
+## What RelayRoom does
+
+- Maintains a synchronized `State` containing a `MapSchema<Player>` with every client's `sessionId`, `name`, and `connected` status.
+- For every message received from a client, broadcasts `[senderSessionId, message]` to all **other** clients under the same message type.
+- Supports optional reconnection: a disconnected player's `connected` flag is set to `false` and their slot is held open for a configurable number of seconds.
+
+## State schema
+
+```typescript
+class Player extends Schema {
+  connected: boolean;  // true when the client is connected
+  name: string;        // name passed in joinOrCreate options
+  sessionId: string;   // client's session ID
+}
+
+class State extends Schema {
+  players = new MapSchema<Player>();
+}
+```
+
+Every connected client automatically receives state patches as players join, leave, or reconnect.
+
+## Server setup
+
+```typescript
+import { Server, RelayRoom } from '@colyseus/core';
+
+const app = new Server();
+
+// Register RelayRoom under any name you choose
+app.define('relay', RelayRoom);
+
+app.listen(2567);
+```
+
+No subclassing is necessary. `RelayRoom` is configured entirely through the options passed by the client at join time.
+
+## Configuration options
+
+<ParamField path="maxClients" type="number">
+  Maximum number of clients allowed in the room. Defaults to the global `Room` default (unlimited unless set).
+</ParamField>
+
+<ParamField path="allowReconnectionTime" type="number">
+  How long (in seconds) a disconnected player's slot is held open. Capped at 40 seconds. Defaults to `0` (no reconnection window). When `0`, players are removed immediately on disconnect.
+</ParamField>
+
+<ParamField path="metadata" type="object">
+  Arbitrary metadata stored on the room's cache entry. Useful when filtering relay rooms via `filterBy`.
+</ParamField>
+
+## Client-side usage
+
+<Tabs>
+  <Tab title="TypeScript / JavaScript">
+    ```typescript
+    import { Client } from 'colyseus.js';
+
+    const client = new Client('ws://localhost:2567');
+
+    // Join or create a relay room with up to 4 players and a player name
+    const room = await client.joinOrCreate('relay', {
+      maxClients: 4,
+      allowReconnectionTime: 20,
+      name: 'Alice',
+    });
+
+    // Listen for messages relayed from other clients
+    // Payload: [senderSessionId, originalMessage]
+    room.onMessage('move', ([sessionId, data]) => {
+      console.log(`Player ${sessionId} moved to`, data);
+    });
+
+    // Send a message — it will be relayed to all other clients
+    room.send('move', { x: 10, y: 5 });
+
+    // Track players via synchronized state
+    room.state.players.onAdd((player, sessionId) => {
+      console.log(`${player.name} (${sessionId}) joined`);
+    });
+
+    room.state.players.onRemove((player, sessionId) => {
+      console.log(`${player.name} (${sessionId}) left`);
+    });
+    ```
+  </Tab>
+  <Tab title="C#">
+    ```csharp
+    var client = new Client("ws://localhost:2567");
+    var room = await client.JoinOrCreateAsync("relay", new Dictionary<string, object> {
+        { "maxClients", 4 },
+        { "allowReconnectionTime", 20 },
+        { "name", "Alice" },
+    });
+
+    room.OnMessage<object[]>("move", (args) => {
+        string sessionId = (string)args[0];
+        Debug.Log($"Player {sessionId} moved");
+    });
+
+    room.Send("move", new { x = 10, y = 5 });
+    ```
+  </Tab>
+</Tabs>
+
+## Message relay behavior
+
+When a client sends any message, `RelayRoom` broadcasts it to all **other** clients in the room:
+
+```typescript
+// Sent by client A with sessionId 'aaa'
+room.send('attack', { target: 'enemy_1' });
+
+// Received by clients B, C, D as:
+// type:    'attack'
+// payload: ['aaa', { target: 'enemy_1' }]
+```
+
+The sender does **not** receive its own message back.
+
+## Reconnection behavior
+
+When `allowReconnectionTime > 0`:
+
+1. On disconnect, the player's `connected` flag is set to `false` in the shared state — all other clients see this immediately.
+2. The slot is held open for up to `allowReconnectionTime` seconds (max 40).
+3. If the player reconnects within the window, `connected` is restored to `true`.
+4. If the player disconnected via a consented leave (e.g., explicit `room.leave()`), no reconnection window is offered.
+5. If the window expires without reconnection, the player entry is removed from the `players` map.
+
+```typescript
+// Monitor connection status changes
+room.state.players.onChange((player, sessionId) => {
+  if (!player.connected) {
+    console.log(`${player.name} disconnected — waiting for reconnect`);
+  }
+});
+```
+
+## When to use RelayRoom vs a custom Room
+
+<CardGroup cols={2}>
+  <Card title="Use RelayRoom when" icon="check">
+    - Prototyping quickly without writing server logic
+    - Game logic is fully authoritative on the clients
+    - You only need message forwarding and a player roster
+    - Room configuration is driven entirely by client-supplied options
+  </Card>
+  <Card title="Use a custom Room when" icon="code">
+    - Server must validate or transform game state
+    - You need authoritative physics, scoring, or anti-cheat
+    - Clients should only receive the state changes they are authorised to see
+    - You need custom `onJoin` / `onLeave` / `onAuth` logic
+  </Card>
+</CardGroup>

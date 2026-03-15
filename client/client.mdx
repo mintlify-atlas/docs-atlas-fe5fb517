@@ -1,0 +1,265 @@
+---
+title: "Colyseus Client"
+description: "The Client class is the entry point for connecting to a Colyseus server and performing matchmaking."
+---
+
+## Creating a client
+
+```typescript
+import { Client } from "@colyseus/sdk";
+
+const client = new Client("ws://localhost:2567");
+```
+
+For production, use `wss://` (secure WebSocket):
+
+```typescript
+const client = new Client("wss://your-server.example.com");
+```
+
+You can also pass a structured `EndpointSettings` object instead of a URL string:
+
+```typescript
+const client = new Client({
+  hostname: "your-server.example.com",
+  port: 443,
+  secure: true,
+  pathname: "",       // optional path prefix
+});
+```
+
+### Client options
+
+<ParamField path="options.headers" type="object">
+  Custom HTTP headers to include with every matchmaking and HTTP request (e.g. `{ "x-api-key": "..." }`).
+</ParamField>
+
+<ParamField path="options.protocol" type="ws | h3" default="ws">
+  Transport protocol. Use `"h3"` to connect over WebTransport instead of WebSocket.
+</ParamField>
+
+<ParamField path="options.urlBuilder" type="(url: URL) => string">
+  Custom function to transform the endpoint URL before connecting. Used automatically when the Discord Embedded SDK is detected.
+</ParamField>
+
+---
+
+## Matchmaking methods
+
+All matchmaking methods return a `Promise<Room>` that resolves when the connection is fully established.
+
+### `joinOrCreate()`
+
+Join an existing room or create a new one if none are available.
+
+```typescript
+const room = await client.joinOrCreate("game");
+```
+
+With options:
+
+```typescript
+const room = await client.joinOrCreate("game", { mode: "ranked" });
+```
+
+<ParamField path="roomName" type="string" required>
+  The name of the room type as registered on the server.
+</ParamField>
+
+<ParamField path="options" type="object">
+  Arbitrary options forwarded to the server-side `onJoin` handler.
+</ParamField>
+
+<ParamField path="rootSchema" type="SchemaConstructor" >
+  Optional root `Schema` class for state deserialization. Required when using state classes in environments that do not support reflection.
+</ParamField>
+
+---
+
+### `create()`
+
+Always create a new room, even if existing rooms are available.
+
+```typescript
+const room = await client.create("game", { private: true });
+```
+
+<ParamField path="roomName" type="string" required>
+  The name of the room type.
+</ParamField>
+
+<ParamField path="options" type="object">
+  Options forwarded to the server-side `onCreate` and `onJoin` handlers.
+</ParamField>
+
+---
+
+### `join()`
+
+Join an existing room. Throws a `MatchMakeError` if no room is available.
+
+```typescript
+const room = await client.join("game");
+```
+
+<ParamField path="roomName" type="string" required>
+  The name of the room type.
+</ParamField>
+
+<ParamField path="options" type="object">
+  Options forwarded to the server-side `onJoin` handler.
+</ParamField>
+
+---
+
+### `joinById()`
+
+Join a specific room instance by its `roomId`.
+
+```typescript
+const room = await client.joinById("abc123");
+```
+
+<ParamField path="roomId" type="string" required>
+  The unique room instance ID.
+</ParamField>
+
+<ParamField path="options" type="object">
+  Options forwarded to the server-side `onJoin` handler.
+</ParamField>
+
+---
+
+### `reconnect()`
+
+Re-establish a connection to a room the client was previously connected to.
+
+```typescript
+// Save the token after joining
+localStorage.setItem("reconnectionToken", room.reconnectionToken);
+
+// Reconnect later
+const token = localStorage.getItem("reconnectionToken");
+const room = await client.reconnect(token);
+```
+
+<ParamField path="reconnectionToken" type="string" required>
+  The `room.reconnectionToken` string from the previously connected `Room` instance. Format is `roomId:token`.
+</ParamField>
+
+<Note>
+  The server must allow reconnection for a given session. The server-side `allowReconnection()` call controls the reconnection window.
+</Note>
+
+---
+
+### `consumeSeatReservation()`
+
+Connect to a room using a pre-existing seat reservation from the server. Useful for custom matchmaking flows.
+
+```typescript
+const reservation = await myCustomMatchmakingAPI();
+const room = await client.consumeSeatReservation(reservation);
+```
+
+<ParamField path="response" type="ISeatReservation" required>
+  A seat reservation object containing `roomId`, `sessionId`, `processId`, and optionally `publicAddress`.
+</ParamField>
+
+---
+
+## Utility methods
+
+### `getLatency()`
+
+Measure round-trip latency to the server by sending a ping.
+
+```typescript
+const ms = await client.getLatency();
+console.log(`latency: ${ms}ms`);
+```
+
+<ParamField path="options.protocol" type="ws | h3" default="ws">
+  Transport to use for the latency measurement.
+</ParamField>
+
+<ParamField path="options.pingCount" type="number" default="1">
+  Number of pings to send. When greater than 1, returns the average latency.
+</ParamField>
+
+### `Client.selectByLatency()`
+
+Static method that creates clients for multiple endpoints, pings all of them, and returns the client connected to the lowest-latency server.
+
+```typescript
+const client = await Client.selectByLatency([
+  "wss://us-east.example.com",
+  "wss://eu-west.example.com",
+  "wss://ap-southeast.example.com",
+]);
+```
+
+---
+
+## `client.http`
+
+A typed HTTP client for making requests to your server's custom routes:
+
+```typescript
+// GET request
+const { data } = await client.http.get("/leaderboard");
+
+// POST request
+const { data } = await client.http.post("/scores", {
+  body: { score: 1500 }
+});
+```
+
+The `client.auth.token` (if set) is automatically included as a `Bearer` authorization header on every request.
+
+Supported methods: `http.get()`, `http.post()`, `http.put()`, `http.patch()`, `http.delete()` / `http.del()`.
+
+---
+
+## `client.auth`
+
+The authentication module. See the [Authentication](/client/auth) page for full documentation.
+
+```typescript
+const { user, token } = await client.auth.signInWithEmailAndPassword(
+  "user@example.com",
+  "password"
+);
+```
+
+---
+
+## Error handling
+
+Matchmaking failures throw a `MatchMakeError`:
+
+```typescript
+import { MatchMakeError } from "@colyseus/sdk";
+
+try {
+  const room = await client.join("game");
+} catch (e) {
+  if (e instanceof MatchMakeError) {
+    console.error("matchmaking failed:", e.code, e.message);
+  }
+}
+```
+
+HTTP errors from `client.http` throw a `ServerError`:
+
+```typescript
+import { ServerError } from "@colyseus/sdk";
+
+try {
+  const { data } = await client.http.get("/protected");
+} catch (e) {
+  if (e instanceof ServerError) {
+    console.error("HTTP error:", e.status, e.message);
+  }
+}
+```

@@ -1,0 +1,129 @@
+---
+title: WebSocket Transport (ws)
+description: The default WebSocket transport for Colyseus, based on the ws package.
+---
+
+`WebSocketTransport` is the default transport used when you create a `Server` without specifying a transport. It is based on the battle-tested [ws](https://github.com/websockets/ws) package and works on any Node.js version.
+
+## Installation
+
+No extra installation is needed. `WebSocketTransport` is included in the `colyseus` package.
+
+If you want to use it explicitly:
+
+```bash
+npm install @colyseus/ws-transport
+```
+
+## Usage
+
+<Tabs>
+  <Tab title="Implicit (default)">
+    ```typescript
+    import { Server } from "colyseus";
+
+    // WebSocketTransport is used automatically
+    const gameServer = new Server();
+    gameServer.listen(2567);
+    ```
+  </Tab>
+  <Tab title="Explicit">
+    ```typescript
+    import { Server } from "colyseus";
+    import { WebSocketTransport } from "@colyseus/ws-transport";
+
+    const gameServer = new Server({
+      transport: new WebSocketTransport({
+        pingInterval: 3000,
+        pingMaxRetries: 2,
+      }),
+    });
+
+    gameServer.listen(2567);
+    ```
+  </Tab>
+</Tabs>
+
+## Options
+
+`WebSocketTransport` accepts all options from the [ws `ServerOptions`](https://github.com/websockets/ws/blob/HEAD/doc/ws.md#new-websocketserveroptions-callback) plus two Colyseus-specific fields.
+
+<ParamField path="pingInterval" type="number" default="3000">
+  How often (in milliseconds) to send a WebSocket ping frame to connected clients. Set to `0` to disable the ping/pong heartbeat.
+</ParamField>
+
+<ParamField path="pingMaxRetries" type="number" default="2">
+  Number of missed pong responses before a client is considered unresponsive and terminated.
+</ParamField>
+
+<ParamField path="maxPayload" type="number" default="4096">
+  Maximum allowed incoming message size in bytes. Defaults to 4 KB.
+</ParamField>
+
+<ParamField path="perMessageDeflate" type="boolean" default="false">
+  Enable per-message deflate compression. Disabled by default for performance.
+</ParamField>
+
+<ParamField path="server" type="http.Server">
+  Attach the WebSocket server to an existing HTTP server. Useful when sharing a port with a REST API.
+</ParamField>
+
+## Custom HTTP server integration
+
+You can bring your own `http.Server` (or an `https.Server` for SSL) and share it with Colyseus:
+
+```typescript
+import http from "http";
+import https from "https";
+import fs from "fs";
+import { Server } from "colyseus";
+import { WebSocketTransport } from "@colyseus/ws-transport";
+
+// HTTPS example
+const httpServer = https.createServer({
+  cert: fs.readFileSync("cert.pem"),
+  key: fs.readFileSync("key.pem"),
+});
+
+const gameServer = new Server({
+  transport: new WebSocketTransport({ server: httpServer }),
+});
+
+gameServer.listen(2567);
+```
+
+## Express integration
+
+Use `transport.getExpressApp()` to mount Express middleware and routes on the same HTTP server:
+
+```typescript
+import express from "express";
+import { Server } from "colyseus";
+import { WebSocketTransport } from "@colyseus/ws-transport";
+
+const transport = new WebSocketTransport();
+const app = transport.getExpressApp();
+
+app.use(express.json());
+app.get("/api/status", (req, res) => res.json({ ok: true }));
+
+const gameServer = new Server({ transport });
+gameServer.listen(2567);
+```
+
+Alternatively, pass `express: true` to the `Server` constructor:
+
+```typescript
+const gameServer = new Server({ express: true });
+const app = (gameServer.transport as WebSocketTransport).getExpressApp();
+```
+
+## Ping/pong heartbeat
+
+The transport automatically pings every connected client every `pingInterval` ms. A client that fails to respond with a pong after `pingMaxRetries` consecutive pings is terminated. This cleans up zombie connections left by crashed clients.
+
+Disable the heartbeat entirely by setting either option to `0`:
+
+```typescript
+new WebSocketTransport({ pingInterval: 0 })
+```

@@ -1,0 +1,113 @@
+---
+title: Redis Presence
+description: Use Redis as the pub/sub and key-value backend for multi-process Colyseus deployments.
+---
+
+`RedisPresence` replaces the default in-memory `LocalPresence` with a Redis-backed implementation. All Colyseus processes sharing the same Redis instance can exchange pub/sub messages and key-value data in real time.
+
+## Installation
+
+<CodeGroup>
+```bash npm
+npm install @colyseus/redis-presence
+```
+```bash yarn
+yarn add @colyseus/redis-presence
+```
+```bash pnpm
+pnpm add @colyseus/redis-presence
+```
+</CodeGroup>
+
+This package depends on [ioredis](https://github.com/redis/ioredis) (installed automatically).
+
+## Basic usage
+
+```typescript
+import { Server } from "colyseus";
+import { RedisPresence } from "@colyseus/redis-presence";
+
+const gameServer = new Server({
+  presence: new RedisPresence(),
+});
+```
+
+With no arguments, `RedisPresence` connects to `127.0.0.1:6379` using the ioredis defaults.
+
+## Configuration options
+
+`RedisPresence` accepts the same options as ioredis's `Redis` constructor.
+
+<Tabs>
+  <Tab title="Connection string">
+    ```typescript
+    new RedisPresence("redis://:password@redis-host:6380/0")
+    ```
+  </Tab>
+  <Tab title="Options object">
+    ```typescript
+    new RedisPresence({
+      host: "redis-host",
+      port: 6380,
+      password: "secret",
+      db: 0,
+      tls: {},          // enable TLS
+      lazyConnect: true,
+    })
+    ```
+  </Tab>
+  <Tab title="Redis Cluster">
+    ```typescript
+    // Pass an array of nodes to use Cluster mode
+    new RedisPresence(
+      [
+        { host: "redis-node-1", port: 6379 },
+        { host: "redis-node-2", port: 6379 },
+        { host: "redis-node-3", port: 6379 },
+      ],
+      {
+        // ioredis ClusterOptions
+        redisOptions: { password: "secret" },
+      }
+    )
+    ```
+  </Tab>
+</Tabs>
+
+## How it works
+
+`RedisPresence` opens **two** ioredis connections internally:
+
+- **`pub`** — used for all read/write operations (GET, SET, HSET, SADD, …) and publishing messages.
+- **`sub`** — a dedicated subscribe-only connection. ioredis requires a separate connection for `SUBSCRIBE` / `PSUBSCRIBE` commands.
+
+This mirrors the standard Redis pub/sub pattern and is handled automatically; you do not need to manage either connection.
+
+## Pairing with RedisDriver
+
+Presence and Driver are independent. You can use `RedisPresence` without `RedisDriver` (e.g., for cross-room messaging in a single-process setup), but for full horizontal scaling you should use both:
+
+```typescript
+import { Server } from "colyseus";
+import { RedisPresence } from "@colyseus/redis-presence";
+import { RedisDriver } from "@colyseus/redis-driver";
+
+const gameServer = new Server({
+  presence: new RedisPresence({ host: "redis", port: 6379 }),
+  driver: new RedisDriver({ host: "redis", port: 6379 }),
+});
+```
+
+## Environment variable pattern
+
+```typescript
+new RedisPresence({
+  host: process.env.REDIS_HOST ?? "127.0.0.1",
+  port: Number(process.env.REDIS_PORT ?? 6379),
+  password: process.env.REDIS_PASSWORD,
+})
+```
+
+<Note>
+  The `RedisPresence` constructor takes the same first argument that `new Redis()` from ioredis accepts: a port number, a connection string, or a configuration object. Pass an array of cluster nodes as the first argument to enable Cluster mode.
+</Note>

@@ -1,0 +1,640 @@
+---
+title: Room
+description: Complete reference for the Colyseus Room class — lifecycle methods, properties, and all available methods.
+---
+
+The `Room` class represents a single game session. Rooms are created on demand by the matchmaker when clients join. Subclass `Room` to implement your game logic.
+
+```typescript
+import { Room, Client } from "@colyseus/core";
+
+interface MyState {
+  score: number;
+}
+
+class MyRoom extends Room<{ state: MyState }> {
+  async onCreate(options: any) {
+    this.state = new MyState();
+  }
+
+  onJoin(client: Client, options: any) {
+    console.log(client.sessionId, "joined");
+  }
+
+  onLeave(client: Client, consented: boolean) {
+    console.log(client.sessionId, "left");
+  }
+
+  onDispose() {
+    console.log("room disposed");
+  }
+}
+```
+
+---
+
+## Lifecycle methods
+
+### `onCreate(options)`
+
+Called once when the room is created by the matchmaker. Use this method to initialize your game state, set up message handlers, and configure room properties.
+
+```typescript
+async onCreate(options: any) {
+  this.state = new GameState();
+
+  this.onMessage("move", (client, message) => {
+    console.log(client.sessionId, "sent move:", message);
+  });
+}
+```
+
+<ParamField path="options" type="any">
+  Options passed from the client via `joinOrCreate`, `join`, or `create`. Merged with the `defaultOptions` registered with `defineRoom()`.
+</ParamField>
+
+### `onAuth(client, options, context)` (instance)
+
+Called before `onJoin()` for every new client connection. Return a truthy value to allow the join. Throw or return falsy to reject.
+
+```typescript
+async onAuth(client: Client, options: any, context: AuthContext) {
+  const user = await db.findUser(options.token);
+  if (!user) throw new ServerError(401, "unauthorized");
+  return user; // stored as client.auth
+}
+```
+
+<ParamField path="client" type="Client" required>
+  The connecting client instance.
+</ParamField>
+
+<ParamField path="options" type="any" required>
+  Options sent by the client.
+</ParamField>
+
+<ParamField path="context" type="AuthContext" required>
+  Authentication context containing the request token, headers, and client IP.
+  <Expandable title="properties">
+    <ResponseField name="token" type="string | undefined">
+      Bearer token extracted from the `Authorization` header.
+    </ResponseField>
+    <ResponseField name="headers" type="Headers">
+      Full request headers.
+    </ResponseField>
+    <ResponseField name="ip" type="string | string[]">
+      Client IP address or array of addresses (when behind a proxy).
+    </ResponseField>
+    <ResponseField name="req" type="any">
+      The underlying HTTP request object (WebSocketTransport only).
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="return" type="any">
+  The returned value is stored as `client.auth` and passed to `onJoin()`.
+</ResponseField>
+
+### `onAuth(token, options, context)` (static)
+
+The static variant of `onAuth` runs once per matchmaking request — before a seat is reserved. Use the static form to validate tokens before room creation overhead.
+
+```typescript
+static async onAuth(token: string, options: any, context: AuthContext) {
+  return await verifyJWT(token);
+}
+```
+
+<Note>
+When you define both static and instance `onAuth`, the static version runs first. If it returns a falsy value the join is rejected immediately.
+</Note>
+
+### `onJoin(client, options, auth)`
+
+Called after `onAuth()` succeeds. The client is now in the `clients` array.
+
+```typescript
+async onJoin(client: Client, options: any, auth: any) {
+  client.userData = { playerId: auth.userId };
+  this.state.players.set(client.sessionId, new Player());
+}
+```
+
+<ParamField path="client" type="Client" required>
+  The joining client.
+</ParamField>
+
+<ParamField path="options" type="any">
+  Options provided by the client.
+</ParamField>
+
+<ParamField path="auth" type="any">
+  Data returned by `onAuth()`. Deprecated as a parameter — access via `client.auth` instead.
+</ParamField>
+
+### `onLeave(client, code)`
+
+Called when a client leaves the room through a consented disconnect (e.g., the client called `room.leave()`).
+
+```typescript
+async onLeave(client: Client, code: number) {
+  this.state.players.delete(client.sessionId);
+}
+```
+
+<ParamField path="client" type="Client" required>
+  The leaving client.
+</ParamField>
+
+<ParamField path="code" type="number">
+  WebSocket close code.
+</ParamField>
+
+### `onDrop(client, code)`
+
+Called when a client drops unexpectedly (network disconnect, browser close). If not defined, `onLeave` is called instead. Use this to implement reconnection logic.
+
+```typescript
+async onDrop(client: Client, code: number) {
+  const reconnection = this.allowReconnection(client, 30);
+
+  try {
+    await reconnection;
+    console.log(client.sessionId, "reconnected!");
+  } catch (e) {
+    this.state.players.delete(client.sessionId);
+  }
+}
+```
+
+<ParamField path="client" type="Client" required>
+  The dropped client.
+</ParamField>
+
+<ParamField path="code" type="number">
+  WebSocket close code.
+</ParamField>
+
+### `onReconnect(client)`
+
+Called when a client successfully reconnects after `allowReconnection()`. Called before the client is considered fully joined.
+
+```typescript
+onReconnect(client: Client) {
+  console.log(client.sessionId, "reconnected");
+}
+```
+
+### `onDispose()`
+
+Called just before the room is destroyed. Clean up timers, database connections, or any external resources here.
+
+```typescript
+async onDispose() {
+  await saveGameResult(this.state);
+}
+```
+
+### `onBeforePatch(state)`
+
+Called before the latest state snapshot is broadcast to all clients on every patch cycle.
+
+```typescript
+onBeforePatch(state: MyState) {
+  state.tickCount++;
+}
+```
+
+<ParamField path="state" type="ExtractRoomState<T>" required>
+  The current room state.
+</ParamField>
+
+### `onUncaughtException(error, methodName)`
+
+When defined, all lifecycle hooks are wrapped in try/catch and exceptions are forwarded here instead of crashing.
+
+```typescript
+onUncaughtException(error: RoomException, methodName: RoomMethodName) {
+  console.error(`Unhandled error in ${methodName}:`, error);
+}
+```
+
+<ParamField path="error" type="RoomException" required>
+  The caught exception, with context about its origin.
+</ParamField>
+
+<ParamField path="methodName" type="RoomMethodName" required>
+  The name of the lifecycle method where the exception originated.
+</ParamField>
+
+### `onBeforeShutdown()`
+
+Called on each room during graceful server shutdown. The default implementation calls `this.disconnect()` with a close code appropriate for the current mode. Override to customize shutdown behavior.
+
+```typescript
+onBeforeShutdown() {
+  this.broadcast("server_restart", { message: "Server is restarting soon" });
+  this.disconnect();
+}
+```
+
+### `onCacheRoom()`
+
+Dev mode only. Called during graceful shutdown. Return any data you want persisted across restarts.
+
+```typescript
+onCacheRoom() {
+  return { customData: this.myGameData };
+}
+```
+
+### `onRestoreRoom(cached)`
+
+Dev mode only. Called at startup with the data returned by `onCacheRoom()` during the previous shutdown.
+
+```typescript
+onRestoreRoom(cached: any) {
+  this.myGameData = cached.customData;
+}
+```
+
+---
+
+## Properties
+
+<ResponseField name="roomId" type="string">
+  Unique auto-generated 9-character room identifier. Can be overridden during `onCreate()` only.
+</ResponseField>
+
+<ResponseField name="roomName" type="string">
+  The room type name defined in `defineServer({ rooms: { my_room: ... } })`. Read-only after initialization.
+</ResponseField>
+
+<ResponseField name="state" type="ExtractRoomState<T>">
+  The room's synchronized state object. Assign a Schema instance to enable automatic delta patching.
+
+  ```typescript
+  this.state = new GameState();
+  ```
+</ResponseField>
+
+<ResponseField name="clients" type="ClientArray<Client>">
+  Array of all currently connected (fully joined) clients. See `ClientArray` for the `getById()` helper.
+</ResponseField>
+
+<ResponseField name="maxClients" type="number" default="Infinity">
+  Maximum number of clients allowed. When reached the room is locked automatically. Setting this property calls `setMatchmaking({ maxClients: value })`.
+</ResponseField>
+
+<ResponseField name="patchRate" type="number | null" default="50">
+  Interval in milliseconds at which the state is patched and broadcast to clients. Defaults to 50ms (20fps). Set to `null` or `0` to disable automatic patching.
+</ResponseField>
+
+<ResponseField name="autoDispose" type="boolean" default="true">
+  When `true`, the room is automatically disposed when the last client leaves.
+</ResponseField>
+
+<ResponseField name="seatReservationTimeout" type="number" default="15">
+  Seconds a client has to complete its WebSocket handshake after a seat reservation. If the client doesn't connect in time, the reservation is released. Can also be set via the `COLYSEUS_SEAT_RESERVATION_TIME` environment variable.
+</ResponseField>
+
+<ResponseField name="maxMessagesPerSecond" type="number" default="Infinity">
+  Rate limit on incoming messages per client per second. Clients exceeding the limit are forcibly disconnected.
+</ResponseField>
+
+<ResponseField name="clock" type="ClockTimer">
+  A `ClockTimer` instance tied to the room lifecycle. All `clock.setTimeout()` and `clock.setInterval()` calls are cleared automatically on `onDispose()`.
+</ResponseField>
+
+<ResponseField name="presence" type="Presence">
+  The presence instance scoped to this room. Subscriptions created through `this.presence` are automatically cleaned up when the room disposes.
+</ResponseField>
+
+<ResponseField name="metadata" type="ExtractRoomMetadata<T>">
+  The room's matchmaking metadata. Can be set directly during `onCreate()`. After creation, use `setMatchmaking({ metadata: ... })` to update and persist.
+</ResponseField>
+
+<ResponseField name="locked" type="boolean">
+  Read-only. `true` when the room is locked (either by `maxClients` being reached or via `lock()`).
+</ResponseField>
+
+<ResponseField name="messages" type="Messages<Room>">
+  Optional object-style message handler map. An alternative to calling `onMessage()` imperatively inside `onCreate()`.
+
+  ```typescript
+  messages = {
+    move: (client, message) => { /* ... */ },
+    chat: validate(z.object({ text: z.string() }), (client, msg) => { /* ... */ }),
+    _: (client, type, message) => { /* catch-all */ },
+  };
+  ```
+</ResponseField>
+
+---
+
+## Methods
+
+### `broadcast(type, message?, options?)`
+
+Sends a message to all connected clients.
+
+```typescript
+this.broadcast("game_over", { winner: client.sessionId });
+
+// exclude the sender
+this.broadcast("player_moved", data, { except: client });
+
+// defer until after the next state patch
+this.broadcast("update", data, { afterNextPatch: true });
+```
+
+<ParamField path="type" type="string | number" required>
+  Message type identifier.
+</ParamField>
+
+<ParamField path="message" type="any">
+  Payload. Encoded with MessagePack automatically.
+</ParamField>
+
+<ParamField path="options" type="IBroadcastOptions">
+  <Expandable title="properties">
+    <ResponseField name="except" type="Client | Client[]">
+      One or more clients to exclude from the broadcast.
+    </ResponseField>
+    <ResponseField name="afterNextPatch" type="boolean">
+      When `true`, the message is queued and sent immediately after the next state patch cycle.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+### `broadcastBytes(type, bytes, options?)`
+
+Broadcasts raw bytes (a `Uint8Array` or `Buffer`) to all clients, without MessagePack encoding.
+
+```typescript
+this.broadcastBytes("binary_data", myUint8Array);
+```
+
+<ParamField path="type" type="string | number" required>
+  Message type identifier.
+</ParamField>
+
+<ParamField path="bytes" type="Uint8Array | Buffer" required>
+  Raw byte payload.
+</ParamField>
+
+<ParamField path="options" type="IBroadcastOptions">
+  Same options as `broadcast()`.
+</ParamField>
+
+### `onMessage(type, callback)`
+
+Registers a handler for incoming messages of a specific type. Returns an unbind function.
+
+```typescript
+// basic handler
+this.onMessage("move", (client, message) => {
+  this.state.players.get(client.sessionId).x = message.x;
+});
+
+// catch-all handler
+this.onMessage("*", (client, type, message) => {
+  console.log(client.sessionId, "sent", type, message);
+});
+
+// with validation (Standard Schema)
+const unbind = this.onMessage(
+  "move",
+  z.object({ x: z.number(), y: z.number() }),
+  (client, message) => {
+    // message.x and message.y are typed numbers
+  }
+);
+
+// unbind later
+unbind();
+```
+
+<ParamField path="type" type="'*' | string | number" required>
+  The message type to handle. Use `'*'` to catch all unhandled messages.
+</ParamField>
+
+<ParamField path="validationSchema" type="StandardSchemaV1">
+  Optional Standard Schema validator (e.g., Zod, Valibot). Messages failing validation cause the client to disconnect.
+</ParamField>
+
+<ParamField path="callback" type="(client: Client, message: T) => void" required>
+  Handler function. When `type` is `'*'`, the signature is `(client, type, message) => void`.
+</ParamField>
+
+### `onMessageBytes(type, callback)`
+
+Registers a handler for raw binary messages sent with `client.sendBytes()` on the client side.
+
+```typescript
+this.onMessageBytes("binary_input", (client, bytes) => {
+  const view = new DataView(bytes.buffer);
+  const x = view.getFloat32(0);
+});
+```
+
+### `validate(schema, handler)`
+
+Helper function to create a validated message handler for use in the `messages` property map.
+
+```typescript
+import { validate } from "@colyseus/core";
+import { z } from "zod";
+
+messages = {
+  move: validate(
+    z.object({ x: z.number(), y: z.number() }),
+    (client, message) => {
+      // message is typed as { x: number, y: number }
+    }
+  ),
+};
+```
+
+### `lock()`
+
+Locks the room to prevent new clients from joining. Persists the lock state to the driver.
+
+```typescript
+await this.lock();
+```
+
+### `unlock()`
+
+Unlocks the room to allow new clients to join (subject to `maxClients`). Persists the unlock state.
+
+```typescript
+await this.unlock();
+```
+
+### `setMatchmaking(updates)`
+
+Updates one or more matchmaking/listing properties in a single atomic operation. This is the recommended way to mutate metadata, lock state, visibility, or `maxClients` after room creation.
+
+```typescript
+await this.setMatchmaking({
+  metadata: { difficulty: "hard", round: 3 },
+  private: false,
+  locked: false,
+  maxClients: 8,
+});
+```
+
+<ParamField path="updates" type="object" required>
+  <Expandable title="properties">
+    <ResponseField name="metadata" type="ExtractRoomMetadata<T>">
+      Replaces (or deep-merges) the room metadata.
+    </ResponseField>
+    <ResponseField name="private" type="boolean">
+      When `true`, the room is hidden from `query()` results.
+    </ResponseField>
+    <ResponseField name="locked" type="boolean">
+      Explicitly locks or unlocks the room.
+    </ResponseField>
+    <ResponseField name="maxClients" type="number">
+      Updates the maximum number of clients. Automatically locks/unlocks the room if the threshold is crossed.
+    </ResponseField>
+    <ResponseField name="unlisted" type="boolean">
+      When `true`, prevents the room from appearing in lobby listings.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+### `setMetadata(meta, persist?)`
+
+Updates metadata fields. Merges with the existing metadata object.
+
+```typescript
+await this.setMetadata({ status: "in_progress" });
+```
+
+<ParamField path="meta" type="Partial<ExtractRoomMetadata<T>>" required>
+  Metadata fields to update. Merged into the existing metadata.
+</ParamField>
+
+<ParamField path="persist" type="boolean" default="true">
+  Whether to persist the change to the driver immediately.
+</ParamField>
+
+### `setPrivate(bool, persist?)`
+
+Toggle the room's private/public visibility for matchmaking queries.
+
+```typescript
+await this.setPrivate(true);
+```
+
+<ParamField path="bool" type="boolean" default="true">
+  `true` makes the room private; `false` makes it public.
+</ParamField>
+
+<ParamField path="persist" type="boolean" default="true">
+  Whether to persist immediately.
+</ParamField>
+
+### `disconnect(closeCode?)`
+
+Disconnects all clients and disposes the room.
+
+```typescript
+await this.disconnect();
+// or with a custom close code
+await this.disconnect(4001);
+```
+
+<ParamField path="closeCode" type="number" default="4000">
+  WebSocket close code sent to all clients. `4000` maps to `CloseCode.CONSENTED`.
+</ParamField>
+
+### `allowReconnection(client, seconds)`
+
+Allows a dropped client to reconnect within the given timeout. Must be called inside `onDrop()` (or `onLeave()`). Returns a `Deferred<Client>` that resolves with the new client on reconnection, or rejects on timeout.
+
+```typescript
+async onDrop(client: Client) {
+  const reconnection = this.allowReconnection(client, 30);
+
+  try {
+    await reconnection;
+    // client reconnected
+  } catch {
+    // timeout — clean up player state
+    this.state.players.delete(client.sessionId);
+  }
+}
+```
+
+<ParamField path="client" type="Client" required>
+  The client to allow reconnection for.
+</ParamField>
+
+<ParamField path="seconds" type="number | 'manual'" required>
+  Seconds before the reconnection slot expires. Pass `"manual"` to control expiration yourself (call `reconnection.reject()` to cancel).
+</ParamField>
+
+<ResponseField name="return" type="Deferred<Client>">
+  A promise-like object that resolves with the reconnected client, or rejects when the timeout expires. Call `.reject()` to cancel manually.
+</ResponseField>
+
+### `hasReachedMaxClients()`
+
+Returns `true` when the sum of connected clients and pending seat reservations is at or above `maxClients`, or when the room is disposing.
+
+```typescript
+if (this.hasReachedMaxClients()) {
+  // room is full
+}
+```
+
+<ResponseField name="return" type="boolean">
+  `true` if the room cannot accept more clients.
+</ResponseField>
+
+### `setSimulationInterval(callback, delay?)`
+
+Sets the game loop (simulation interval). The callback receives `deltaTime` in milliseconds since the last tick. The clock is also advanced on each tick.
+
+```typescript
+this.setSimulationInterval((deltaTime) => {
+  this.state.physics.update(deltaTime);
+}, 1000 / 60); // 60fps
+```
+
+<ParamField path="callback" type="(deltaTime: number) => void">
+  The simulation tick function.
+</ParamField>
+
+<ParamField path="delay" type="number" default="16.6">
+  Interval in milliseconds between ticks. Defaults to ~16.6ms (60fps).
+</ParamField>
+
+---
+
+## `room()` functional API
+
+An alternative to subclassing. Define a room inline with plain functions.
+
+```typescript
+import { room } from "@colyseus/core";
+
+const GameRoom = room<{ state: GameState }>({
+  state: () => new GameState(),
+
+  onCreate(options) {
+    this.onMessage("move", (client, msg) => { /* ... */ });
+  },
+
+  onJoin(client) {
+    this.state.players.set(client.sessionId, new Player());
+  },
+
+  onLeave(client) {
+    this.state.players.delete(client.sessionId);
+  },
+});
+```

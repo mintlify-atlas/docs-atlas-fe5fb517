@@ -1,0 +1,212 @@
+---
+title: Client
+description: Complete reference for the server-side Client interface, ClientState enum, and ClientArray class.
+---
+
+The server-side `Client` interface represents a single WebSocket connection. Instances are available in `this.clients`, and are passed to lifecycle methods like `onJoin`, `onLeave`, and `onMessage` handlers.
+
+<Warning>
+Do not confuse the server-side `Client` with the client-side SDK `Client`. They have completely different APIs and purposes.
+</Warning>
+
+---
+
+## `Client` interface
+
+### Properties
+
+<ResponseField name="sessionId" type="string">
+  Unique identifier per connection session. Remains the same across reconnections if `allowReconnection()` is used.
+</ResponseField>
+
+<ResponseField name="reconnectionToken" type="string">
+  A private token used for reconnection. The client-side SDK sends this as `${roomId}:${reconnectionToken}` when calling `room.reconnect()`. A new token is generated each time the client (re)joins.
+</ResponseField>
+
+<ResponseField name="auth" type="any">
+  Data returned by `onAuth()`. Contains any authentication payload your `onAuth` implementation resolved with.
+
+  ```typescript
+  onJoin(client: Client) {
+    console.log(client.auth.userId); // data from onAuth
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="userData" type="any">
+  Arbitrary data you can attach to the client instance. Not synchronized to the client — use this for server-only session data.
+
+  ```typescript
+  onJoin(client: Client) {
+    client.userData = { joinedAt: Date.now() };
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="state" type="ClientState">
+  The current connection state. See `ClientState` enum below.
+</ResponseField>
+
+<ResponseField name="readyState" type="number">
+  The underlying WebSocket `readyState` value. Prefer using `client.state` for application-level state checks.
+</ResponseField>
+
+<ResponseField name="view" type="StateView | undefined">
+  When using `@view()` decorators on Schema state properties, this holds the client's `StateView` instance that controls which parts of the state this client receives.
+</ResponseField>
+
+### Methods
+
+#### `client.send(type, message?, options?)`
+
+Sends a message to this specific client. The payload is encoded with MessagePack.
+
+```typescript
+client.send("game_event", { type: "spawn", x: 10, y: 20 });
+
+// queue until after the next state patch
+client.send("sync", data, { afterNextPatch: true });
+```
+
+<ParamField path="type" type="string | number" required>
+  Message type identifier recognized by the client SDK's `room.onMessage()` handler.
+</ParamField>
+
+<ParamField path="message" type="any">
+  Message payload. Automatically encoded with MessagePack.
+</ParamField>
+
+<ParamField path="options" type="ISendOptions">
+  <Expandable title="properties">
+    <ResponseField name="afterNextPatch" type="boolean">
+      When `true`, the message is queued and sent immediately after the next state patch is broadcast.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+#### `client.sendBytes(type, bytes, options?)`
+
+Sends raw bytes to this client without MessagePack encoding.
+
+```typescript
+const buf = new Uint8Array([0x01, 0x02, 0x03]);
+client.sendBytes("binary", buf);
+```
+
+<ParamField path="type" type="string | number" required>
+  Message type identifier.
+</ParamField>
+
+<ParamField path="bytes" type="Buffer | Uint8Array" required>
+  Raw byte array to send.
+</ParamField>
+
+<ParamField path="options" type="ISendOptions">
+  Same options as `send()`.
+</ParamField>
+
+#### `client.leave(code?, data?)`
+
+Disconnects this client from the room. Triggers the room's `onLeave` (or `onDrop`) lifecycle method.
+
+```typescript
+client.leave(); // close code 1000
+client.leave(4001, "kicked");
+```
+
+<ParamField path="code" type="number">
+  WebSocket close code. Default is `1000`.
+</ParamField>
+
+<ParamField path="data" type="string">
+  Optional close reason string.
+</ParamField>
+
+#### `client.error(code, message?)`
+
+Triggers `onError` on the client-side SDK with the given application error code and message.
+
+```typescript
+client.error(400, "invalid move");
+```
+
+<ParamField path="code" type="number" required>
+  Application-level error code.
+</ParamField>
+
+<ParamField path="message" type="string">
+  Human-readable error description.
+</ParamField>
+
+#### `client.raw(bytes, options?, callback?)`
+
+Sends raw bytes directly over the transport without any protocol framing. For advanced use cases only.
+
+<ParamField path="bytes" type="Uint8Array | Buffer" required>
+  Raw data to transmit.
+</ParamField>
+
+---
+
+## `ClientState` enum
+
+Tracks the connection lifecycle of each client.
+
+| Name | Value | Description |
+|------|-------|-------------|
+| `JOINING` | `0` | Client has reserved a seat and is performing the join handshake. |
+| `JOINED` | `1` | Client has fully joined and can send/receive messages. |
+| `RECONNECTING` | `2` | Client was dropped and a new connection is being reconnected. |
+| `RECONNECTED` | `3` | The previous client reference has been replaced by the new connection. |
+| `LEAVING` | `4` | Client is in the process of leaving (onLeave/onDrop is running). |
+| `CLOSED` | `5` | Connection is closed. |
+
+```typescript
+import { ClientState } from "@colyseus/core";
+
+onMessage("*", (client, type, message) => {
+  if (client.state !== ClientState.JOINED) return;
+  // ...
+});
+```
+
+---
+
+## `ClientArray<T>`
+
+A specialized `Array` subclass that holds all connected clients in a room (`this.clients`). Extends native `Array<T>` with additional helpers.
+
+### `getById(sessionId)`
+
+Returns the client with the matching `sessionId`, or `undefined` if not found.
+
+```typescript
+const player = this.clients.getById("abc123");
+if (player) {
+  player.send("private_message", { text: "Hello" });
+}
+```
+
+<ParamField path="sessionId" type="string" required>
+  The session ID to look up.
+</ParamField>
+
+<ResponseField name="return" type="T | undefined">
+  The matching client instance, or `undefined`.
+</ResponseField>
+
+### `delete(client)`
+
+Removes a client from the array by reference. Used internally by the framework.
+
+<ParamField path="client" type="T" required>
+  The client instance to remove.
+</ParamField>
+
+<ResponseField name="return" type="boolean">
+  `true` if the client was found and removed.
+</ResponseField>
+
+<Tip>
+`ClientArray` inherits all standard `Array` methods — `find`, `filter`, `forEach`, `map`, etc. work as expected.
+</Tip>

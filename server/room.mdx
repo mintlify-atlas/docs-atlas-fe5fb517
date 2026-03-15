@@ -1,0 +1,559 @@
+---
+title: "Room"
+description: "The Room class hosts a game session. Learn its lifecycle hooks, properties, and methods."
+---
+
+A `Room` represents a single game session (or communication channel). Rooms are created on demand by the MatchMaker when clients request to join. Each room runs in a single Node.js process and is destroyed when the last client leaves (unless `autoDispose` is `false`).
+
+## Defining a room
+
+Extend the `Room` class and pass type parameters to constrain the state, metadata, and client shape.
+
+```typescript
+import { Room, Client } from "@colyseus/core";
+import { GameState } from "./GameState";
+import { MyClient } from "./MyClient";
+
+class GameRoom extends Room<{
+  state: GameState;
+  metadata: { difficulty: string; round: number };
+  client: MyClient;
+}> {
+  onCreate(options: { maxPlayers: number }) {
+    this.state = new GameState();
+    this.maxClients = options.maxPlayers ?? 4;
+  }
+
+  onJoin(client: MyClient) {
+    console.log(client.sessionId, "joined");
+  }
+
+  onLeave(client: MyClient, code: number) {
+    console.log(client.sessionId, "left with code", code);
+  }
+
+  onDispose() {
+    console.log("room", this.roomId, "disposing");
+  }
+}
+```
+
+### Functional definition with `room()`
+
+For a lighter, non-class syntax use the `room()` factory:
+
+```typescript
+import { room } from "@colyseus/core";
+import { GameState } from "./GameState";
+
+const GameRoom = room<{ state: GameState }>({
+  state: () => new GameState(),
+
+  onCreate(options) {
+    this.maxClients = 4;
+  },
+
+  onJoin(client) {
+    console.log(client.sessionId, "joined");
+  },
+});
+
+export { GameRoom };
+```
+
+---
+
+## Lifecycle hooks
+
+### `onCreate(options)`
+
+Called once when the room is first created by the MatchMaker. Set initial state, configure room options, and register message handlers here.
+
+```typescript
+async onCreate(options: { map: string; maxPlayers: number }) {
+  this.state = new GameState();
+  this.maxClients = options.maxPlayers ?? 8;
+
+  // load map from database
+  const map = await MapService.load(options.map);
+  this.state.map = map;
+
+  this.onMessage("move", (client, data: { x: number; y: number }) => {
+    this.state.players[client.sessionId].x = data.x;
+    this.state.players[client.sessionId].y = data.y;
+  });
+}
+```
+
+### `onAuth(client, options, context)`
+
+Called before `onJoin`. Return a truthy value to allow the client in; throw a `ServerError` (or return a falsy value) to reject it. The return value is stored as `client.auth`.
+
+```typescript
+import { Client, ServerError } from "@colyseus/core";
+import { ErrorCode } from "@colyseus/shared-types";
+
+async onAuth(client: Client, options: { token: string }) {
+  const user = await verifyJWT(options.token);
+  if (!user) {
+    throw new ServerError(ErrorCode.AUTH_FAILED, "Invalid token");
+  }
+  return user; // stored as client.auth
+}
+```
+
+<Tip>
+The static `Room.onAuth()` variant runs before a seat is even reserved, which reduces wasted seat reservations for unauthenticated clients.
+</Tip>
+
+### `onJoin(client, options, auth)`
+
+Called after `onAuth` succeeds. The client is now in `this.clients`.
+
+```typescript
+onJoin(client: Client, options: any) {
+  const player = new Player();
+  player.name = client.auth.username;
+  this.state.players.set(client.sessionId, player);
+
+  this.broadcast("player_joined", { sessionId: client.sessionId });
+}
+```
+
+### `onLeave(client, code)`
+
+Called when a client leaves **with consent** (i.e., they called `room.leave()` from the client side, or the server called `client.leave()`). `code` is the WebSocket close code.
+
+```typescript
+onLeave(client: Client, code: number) {
+  this.state.players.delete(client.sessionId);
+}
+```
+
+### `onDrop(client, code)`
+
+Called when a client is **dropped unexpectedly** (network error, browser tab closed, etc.). If not defined, `onLeave` is called instead for all disconnections. Use `onDrop` when you want to distinguish between voluntary and involuntary disconnects—for example, to offer a reconnection window.
+
+```typescript
+async onDrop(client: Client, code: number) {
+  const reconnection = this.allowReconnection(client, 30);
+
+  try {
+    await reconnection; // waits up to 30s for client to reconnect
+    console.log(client.sessionId, "reconnected!");
+  } catch {
+    // reconnection timed out
+    this.state.players.delete(client.sessionId);
+  }
+}
+```
+
+### `onReconnect(client)`
+
+Called when a previously dropped client successfully reconnects (after `allowReconnection` was called). Throw from this method to deny the reconnection.
+
+```typescript
+onReconnect(client: Client) {
+  console.log(client.sessionId, "reconnected");
+  // Restore in-game state, notify other players, etc.
+}
+```
+
+### `onDispose()`
+
+Called once, just before the room instance is destroyed. Clean up external resources (database connections, timers, etc.) here.
+
+```typescript
+async onDispose() {
+  await saveGameResult(this.state);
+  console.log("room", this.roomId, "disposed");
+}
+```
+
+### `onBeforePatch(state)`
+
+Called before each state patch is broadcast to clients. Use it to compute derived values or run final validations before the snapshot is sent.
+
+```typescript
+onBeforePatch(state: GameState) {
+  state.playerCount = state.players.size;
+}
+```
+
+---
+
+## Room properties
+
+<ParamField path="roomId" type="string">
+  Auto-generated 9-character unique identifier for this room instance. You may override it during `onCreate()` only.
+
+  ```typescript
+  onCreate() {
+    this.roomId = "custom-id-123"; // only allowed during onCreate
+  }
+  ```
+</ParamField>
+
+<ParamField path="roomName" type="string">
+  The public room name used during matchmaking (e.g., `"game"`). Set by the MatchMaker from the `server.define()` call; read-only after that.
+</ParamField>
+
+<ParamField path="state" type="T[state]">
+  The authoritative state object. Assigning a `@colyseus/schema` instance here activates delta-patch synchronization.
+
+  ```typescript
+  onCreate() {
+    this.state = new GameState();
+  }
+  ```
+</ParamField>
+
+<ParamField path="clients" type="ClientArray<Client>">
+  Array of all currently connected `Client` instances. Use `this.clients.getById(sessionId)` to look up a specific client.
+</ParamField>
+
+<ParamField path="maxClients" type="number" default="Infinity">
+  Maximum number of clients allowed. The room is automatically locked when this limit is reached and unlocked when a slot frees up.
+</ParamField>
+
+<ParamField path="patchRate" type="number | null" default="50">
+  How often (in milliseconds) state patches are broadcast to clients. Default is `50` ms (20 fps). Set to `null` or `0` to disable automatic patching.
+</ParamField>
+
+<ParamField path="autoDispose" type="boolean" default="true">
+  Whether the room should be destroyed automatically once all clients have left. Set to `false` for persistent rooms.
+</ParamField>
+
+<ParamField path="seatReservationTimeout" type="number" default="15">
+  Number of seconds a seat reservation is held before expiring if the client never completes the WebSocket handshake. Can also be set globally via the `COLYSEUS_SEAT_RESERVATION_TIME` environment variable.
+</ParamField>
+
+<ParamField path="maxMessagesPerSecond" type="number" default="Infinity">
+  Rate limit for incoming client messages. Clients that exceed this threshold are forcibly disconnected.
+</ParamField>
+
+<ParamField path="clock" type="Clock">
+  A `ClockTimer` instance tied to the room. All `clock.setTimeout` and `clock.setInterval` callbacks are automatically cleared when the room is disposed.
+
+  ```typescript
+  onCreate() {
+    this.clock.setTimeout(() => {
+      this.broadcast("countdown", { seconds: 0 });
+      this.disconnect();
+    }, 60_000);
+  }
+  ```
+</ParamField>
+
+<ParamField path="presence" type="Presence">
+  The shared Presence backend (local or Redis). Use it for pub/sub across rooms or processes.
+
+  ```typescript
+  await this.presence.publish("leaderboard:update", JSON.stringify(scores));
+  ```
+</ParamField>
+
+<ParamField path="metadata" type="T[metadata]">
+  Matchmaking metadata attached to this room's listing. Can only be set directly during `onCreate()`. Use `setMatchmaking()` after the room is created.
+</ParamField>
+
+<ParamField path="locked" type="boolean">
+  Read-only. `true` when the room is locked (either explicitly via `lock()` or automatically because `maxClients` was reached).
+</ParamField>
+
+---
+
+## Messaging
+
+### `onMessage(type, callback)` — imperative handlers
+
+Register a handler for a specific message type sent from clients.
+
+```typescript
+onCreate() {
+  // String type
+  this.onMessage("move", (client, data: { x: number; y: number }) => {
+    this.state.players[client.sessionId].position = data;
+  });
+
+  // Numeric type
+  this.onMessage(42, (client, data) => {
+    console.log("received message 42", data);
+  });
+
+  // Wildcard — catches all unhandled types
+  this.onMessage("*", (client, type, data) => {
+    console.log(client.sessionId, "sent", type, data);
+  });
+}
+```
+
+With inline validation using a Standard Schema-compatible library (e.g., Zod or Valibot):
+
+```typescript
+import { z } from "zod";
+
+this.onMessage(
+  "move",
+  z.object({ x: z.number(), y: z.number() }),
+  (client, data) => {
+    // data.x and data.y are typed and validated
+    this.state.players[client.sessionId].x = data.x;
+    this.state.players[client.sessionId].y = data.y;
+  }
+);
+```
+
+`onMessage` returns an unbind function:
+
+```typescript
+const unbind = this.onMessage("attack", handler);
+// later
+unbind();
+```
+
+### `messages` — declarative handlers
+
+Alternatively, define message handlers as a class property. Handlers defined here are bound to the room instance automatically.
+
+```typescript
+import { Room, Client, validate } from "@colyseus/core";
+import { z } from "zod";
+
+class GameRoom extends Room {
+  messages = {
+    // Simple handler
+    chat: (client: Client, data: { text: string }) => {
+      this.broadcast("chat", { from: client.sessionId, text: data.text });
+    },
+
+    // Validated handler using validate() helper
+    move: validate(
+      z.object({ x: z.number(), y: z.number() }),
+      (client, data) => {
+        this.state.players[client.sessionId].x = data.x;
+        this.state.players[client.sessionId].y = data.y;
+      }
+    ),
+
+    // Fallback for unregistered types (maps to "*")
+    _: (client: Client, type: string, data: unknown) => {
+      console.warn("unhandled message", type, data);
+    },
+  };
+}
+```
+
+### `broadcast(type, message, options?)`
+
+Send a message to all connected clients.
+
+```typescript
+// Broadcast to everyone
+this.broadcast("scored", { playerId: "abc", points: 10 });
+
+// Exclude one client
+this.broadcast("scored", { playerId: "abc", points: 10 }, { except: client });
+
+// Exclude multiple clients
+this.broadcast("scored", { playerId: "abc", points: 10 }, { except: [client1, client2] });
+
+// Send after the next state patch
+this.broadcast("round_end", {}, { afterNextPatch: true });
+```
+
+---
+
+## Room methods
+
+### `lock()` and `unlock()`
+
+Explicitly prevent or allow new clients from joining.
+
+```typescript
+// Lock room (no new clients)
+await this.lock();
+
+// Unlock room
+await this.unlock();
+```
+
+### `disconnect(closeCode?)`
+
+Disconnect all clients and dispose the room. The default close code is `4000` (consented leave).
+
+```typescript
+await this.disconnect();
+```
+
+### `allowReconnection(client, seconds)`
+
+Used inside `onDrop` to hold a seat open for a dropped client. Returns a `Deferred<Client>` promise that resolves when the client reconnects or rejects when the timeout expires.
+
+```typescript
+async onDrop(client: Client) {
+  const reconnection = this.allowReconnection(client, 30);
+
+  try {
+    const newClient = await reconnection;
+    console.log(newClient.sessionId, "reconnected");
+  } catch {
+    this.state.players.delete(client.sessionId);
+  }
+}
+```
+
+Pass `"manual"` as the second argument to keep the reconnection window open indefinitely until you call `reconnection.reject()`:
+
+```typescript
+const reconnection = this.allowReconnection(client, "manual");
+// later:
+reconnection.reject(); // close the window
+```
+
+### `setMatchmaking(updates)`
+
+Update multiple matchmaking listing properties atomically with a single persist operation.
+
+```typescript
+await this.setMatchmaking({
+  metadata: { round: this.state.round, status: "in_progress" },
+  locked: true,
+  maxClients: 8,
+});
+```
+
+### `setMetadata(meta, persist?)`
+
+Merge new values into the room's matchmaking metadata. Set `persist` to `false` to skip the database write.
+
+```typescript
+await this.setMetadata({ round: 2, map: "forest" });
+```
+
+<Note>
+Use `setMatchmaking()` when you need to update multiple properties at once to avoid redundant persistence calls.
+</Note>
+
+### `setPrivate(bool, persist?)`
+
+Hide or show the room in public matchmaking queries.
+
+```typescript
+await this.setPrivate(true); // hide from matchmaking
+await this.setPrivate(false); // show again
+```
+
+### `setSimulationInterval(callback, delay?)`
+
+Set a game-loop callback that runs at a fixed interval. The callback receives `deltaTime` in milliseconds.
+
+```typescript
+onCreate() {
+  this.setSimulationInterval((deltaTime) => {
+    this.state.world.update(deltaTime);
+  }, 1000 / 60); // 60 fps
+}
+```
+
+Default `delay` is `~16.6 ms` (60 fps). When a simulation interval is active, it drives the clock tick (overriding the default patch-rate clock tick).
+
+<Tip>
+Use `this.clock` for one-off or lower-frequency timers instead of `setSimulationInterval`. Reserve `setSimulationInterval` for the main physics/game loop.
+</Tip>
+
+---
+
+## Error handling with `onUncaughtException`
+
+Define `onUncaughtException` to centrally catch errors thrown by lifecycle hooks, message handlers, and clock callbacks.
+
+```typescript
+import { Room, Client, type RoomException, type RoomMethodName } from "@colyseus/core";
+
+class GameRoom extends Room {
+  onUncaughtException(error: RoomException, methodName: RoomMethodName) {
+    console.error(`Uncaught error in ${methodName}:`, error);
+    // report to Sentry, Datadog, etc.
+  }
+
+  onCreate() {
+    this.onMessage("move", (client, data) => {
+      // any error thrown here is forwarded to onUncaughtException
+      this.state.applyMove(data);
+    });
+  }
+}
+```
+
+The following methods are automatically wrapped when `onUncaughtException` is defined:
+
+- `onCreate`, `onAuth`, `onJoin`, `onLeave`, `onDrop`, `onReconnect`, `onDispose`
+- Every `onMessage` handler
+- `setSimulationInterval` callback
+- `clock.setTimeout` and `clock.setInterval` callbacks
+
+<Warning>
+This feature is experimental and the API may change in future releases.
+</Warning>
+
+---
+
+## Full lifecycle example
+
+```typescript
+import { Room, Client, ServerError } from "@colyseus/core";
+import { ErrorCode } from "@colyseus/shared-types";
+import { GameState } from "./GameState";
+
+class GameRoom extends Room<{ state: GameState; metadata: { map: string } }> {
+  async onCreate(options: { map: string }) {
+    this.state = new GameState();
+    this.maxClients = 4;
+    this.metadata = { map: options.map };
+
+    this.onMessage("move", (client, data: { x: number; y: number }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (player) {
+        player.x = data.x;
+        player.y = data.y;
+      }
+    });
+
+    this.setSimulationInterval((dt) => this.update(dt));
+  }
+
+  async onAuth(client: Client, options: { token: string }) {
+    const user = await validateToken(options.token);
+    if (!user) throw new ServerError(ErrorCode.AUTH_FAILED, "Unauthorized");
+    return user;
+  }
+
+  onJoin(client: Client) {
+    const player = new Player();
+    player.name = client.auth.username;
+    this.state.players.set(client.sessionId, player);
+  }
+
+  async onDrop(client: Client) {
+    const reconnection = this.allowReconnection(client, 30);
+    try {
+      await reconnection;
+    } catch {
+      this.state.players.delete(client.sessionId);
+    }
+  }
+
+  onLeave(client: Client) {
+    this.state.players.delete(client.sessionId);
+  }
+
+  async onDispose() {
+    await persistScore(this.roomId, this.state);
+  }
+
+  private update(deltaTime: number) {
+    this.state.world.tick(deltaTime);
+  }
+}
+```

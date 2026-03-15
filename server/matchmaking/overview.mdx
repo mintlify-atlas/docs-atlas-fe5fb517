@@ -1,0 +1,163 @@
+---
+title: 'Matchmaking Overview'
+description: 'How Colyseus routes clients to rooms using joinOrCreate, create, join, and joinById.'
+keywords: ['matchmaking', 'rooms', 'joinOrCreate', 'create', 'join', 'joinById']
+---
+
+Colyseus matchmaking is the system that connects clients to room instances. When a client calls a matchmaking method, the server locates or creates a suitable room, reserves a seat, and returns a reservation token the client uses to open its WebSocket connection.
+
+## Client-side matchmaking methods
+
+The Colyseus client SDK exposes four matchmaking entry points:
+
+| Method | Behavior |
+|---|---|
+| `joinOrCreate(roomName, options)` | Joins an existing available room or creates a new one |
+| `create(roomName, options)` | Always creates a new room instance |
+| `join(roomName, options)` | Joins an existing available room; throws if none found |
+| `joinById(roomId, options)` | Joins a specific room by its unique ID |
+
+```typescript
+// Client-side examples
+const room = await client.joinOrCreate('game_room', { level: 5 });
+const room = await client.create('game_room', { map: 'forest' });
+const room = await client.join('game_room', { mode: 'ranked' });
+const room = await client.joinById('abc123', { token: 'xyz' });
+```
+
+## Room creation flow
+
+<Steps>
+  <Step title="Client calls a matchmaking method">
+    The client calls `joinOrCreate`, `create`, `join`, or `joinById` with a room name and any options.
+  </Step>
+
+  <Step title="MatchMaker selects a process">
+    For `joinOrCreate` and `create`, the MatchMaker selects the server process with the fewest active rooms. In a single-process setup this is always the current process.
+  </Step>
+
+  <Step title="Room is located or created">
+    `joinOrCreate` first queries the driver for a public, unlocked room that matches the filter criteria. If none is found, a new room instance is created by calling `onCreate`.
+
+    To prevent duplicate rooms from being created under concurrent requests with the same filter criteria, a concurrency lock is held while the room is being created.
+  </Step>
+
+  <Step title="Seat is reserved">
+    The MatchMaker calls `_reserveSeat` on the room process. This increments the client count and returns a `sessionId` and room metadata bundled as a seat reservation.
+  </Step>
+
+  <Step title="Client connects via WebSocket">
+    The client uses the seat reservation to open a WebSocket connection directly to the room process, and `onJoin` is called.
+  </Step>
+</Steps>
+
+## How room filtering works
+
+When a client passes options to `joinOrCreate` or `join`, the MatchMaker extracts only the fields listed in the room's `filterBy` configuration and uses them to query available rooms.
+
+```typescript
+// Server — define which options are used for filtering
+app.define('game_room', GameRoom)
+  .filterBy(['level', 'mode']);
+
+// Client — options drive which room the client lands in
+const room = await client.joinOrCreate('game_room', { level: 5, mode: 'ranked' });
+```
+
+Only fields declared in `filterBy` are included in the query. Undeclared fields are ignored for matching purposes and are still forwarded to `onJoin`.
+
+### Built-in filterable fields
+
+In addition to metadata fields you declare, the following built-in `IRoomCache` fields are always available for filtering:
+
+| Field | Description |
+|---|---|
+| `maxClients` | Maximum number of clients the room allows |
+| `locked` | Whether the room is explicitly locked |
+| `private` | Whether the room is private (hidden from listings) |
+
+<Warning>
+  The fields `clients`, `metadata`, `name`, `processId`, and `roomId` are reserved for internal use and will be ignored with a warning if passed to `filterBy`.
+</Warning>
+
+## Sorting available rooms
+
+Use `sortBy` to control which of several matching rooms a client lands in.
+
+```typescript
+// Prefer the most populated room (fill rooms before opening new ones)
+app.define('game_room', GameRoom)
+  .filterBy(['mode'])
+  .sortBy({ clients: -1 });
+
+// Sort by a metadata field
+app.define('game_room', GameRoom)
+  .filterBy(['mode'])
+  .sortBy({ 'metadata.rating': -1 });
+```
+
+SortBy values follow MongoDB-style direction: `1` for ascending, `-1` for descending.
+
+## Room metadata
+
+Metadata is a free-form object stored alongside the room cache entry. It is used for:
+
+- Filtering rooms when declared via `filterBy`
+- Displaying room details in a lobby
+- Custom queries via `matchMaker.query()`
+
+Set metadata inside `onCreate`:
+
+```typescript
+import { Room } from '@colyseus/core';
+
+class GameRoom extends Room {
+  onCreate(options: any) {
+    this.setMetadata({
+      map: options.map,
+      difficulty: options.difficulty,
+    });
+  }
+}
+```
+
+Update metadata at runtime with `setMatchmaking`:
+
+```typescript
+// Update metadata (and optionally other listing properties) atomically
+await this.setMatchmaking({
+  metadata: { ...this.metadata, round: 2 },
+  locked: false,
+});
+```
+
+<Tip>
+  Use `setMatchmaking` when you need to update multiple listing properties at once — it performs a single persist operation instead of multiple round-trips.
+</Tip>
+
+## defineRoom options reference
+
+<ParamField path="filterBy" type="string[]">
+  Fields from the client options (or metadata) that are extracted and used to query available rooms. Only exact-match filtering is supported.
+</ParamField>
+
+<ParamField path="sortBy" type="object">
+  An object mapping field names to sort direction (`1` ascending, `-1` descending). Applied when querying for an available room in `joinOrCreate` / `join`.
+</ParamField>
+
+## Related pages
+
+<CardGroup cols={2}>
+  <Card title="Room Filters" icon="filter" href="/server/matchmaking/room-filters">
+    Deep-dive on filterBy, sortBy, and runtime metadata updates.
+  </Card>
+  <Card title="LobbyRoom" icon="list" href="/server/matchmaking/lobby-room">
+    Built-in room that broadcasts live room-list updates to clients.
+  </Card>
+  <Card title="RelayRoom" icon="arrow-left-right" href="/server/matchmaking/relay-room">
+    Built-in room that relays messages between clients without custom logic.
+  </Card>
+  <Card title="QueueRoom" icon="users" href="/server/matchmaking/queue-room">
+    Rank-based matchmaking queue that groups players and spawns game rooms.
+  </Card>
+</CardGroup>

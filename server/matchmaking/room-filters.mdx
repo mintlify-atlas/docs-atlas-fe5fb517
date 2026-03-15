@@ -1,0 +1,218 @@
+---
+title: 'Room Filters'
+description: 'Use filterBy and sortBy to control which rooms clients join, and update room listing metadata at runtime.'
+keywords: ['filterBy', 'sortBy', 'metadata', 'room filters', 'matchmaking', 'setMetadata', 'setMatchmaking']
+---
+
+Room filters let the MatchMaker narrow the pool of available rooms before selecting one for a client. Only rooms that match every declared filter field are considered. Rooms that do not match are skipped entirely, and a new room is created if no matching room is found.
+
+## filterBy
+
+Call `.filterBy()` when defining a room to declare which client options drive room selection.
+
+```typescript
+import { GameRoom } from './GameRoom';
+
+app.define('game_room', GameRoom)
+  .filterBy(['level', 'mode']);
+```
+
+When a client calls `joinOrCreate('game_room', { level: 5, mode: 'ranked' })`, the MatchMaker queries for rooms where both `level === 5` **and** `mode === 'ranked'`. Fields not listed in `filterBy` are forwarded to `onJoin` but are not used for room selection.
+
+### Filtering by metadata fields
+
+You can filter on metadata fields by including them in `filterBy`. The MatchMaker stores them in the room's metadata object and queries against that.
+
+```typescript
+app.define('game_room', GameRoom)
+  .filterBy(['difficulty', 'region']);
+```
+
+```typescript
+// Room sets the metadata on creation
+class GameRoom extends Room {
+  onCreate(options: any) {
+    this.setMetadata({
+      difficulty: options.difficulty,
+      region: options.region,
+    });
+  }
+}
+```
+
+```typescript
+// Client selects a room with matching metadata
+const room = await client.joinOrCreate('game_room', {
+  difficulty: 'hard',
+  region: 'eu-west',
+});
+```
+
+### Filtering by built-in fields
+
+The following `IRoomCache` fields can also be included in `filterBy`:
+
+<ParamField path="maxClients" type="number">
+  Exact match on the room's `maxClients` setting. Useful when different room sizes should never be mixed.
+</ParamField>
+
+<ParamField path="locked" type="boolean">
+  Whether the room is locked. Note: the MatchMaker already excludes locked rooms from `joinOrCreate` / `join` queries by default.
+</ParamField>
+
+<ParamField path="private" type="boolean">
+  Whether the room is private. Private rooms are excluded from lobby listings but can still be joined by ID.
+</ParamField>
+
+<Warning>
+  The keys `clients`, `metadata`, `name`, `processId`, and `roomId` are reserved for internal use. Passing them to `filterBy` will log a warning and the field will be ignored.
+</Warning>
+
+## sortBy
+
+When multiple rooms match the filter criteria, `sortBy` determines which one is picked.
+
+```typescript
+// Fill existing rooms before opening new ones
+app.define('game_room', GameRoom)
+  .filterBy(['mode'])
+  .sortBy({ clients: -1 });
+```
+
+Direction values follow MongoDB conventions:
+
+| Value | Meaning |
+|---|---|
+| `1` | Ascending (lowest first) |
+| `-1` | Descending (highest first) |
+
+### Sorting by metadata
+
+You can sort on metadata fields using dot notation:
+
+```typescript
+app.define('game_room', GameRoom)
+  .filterBy(['mode'])
+  .sortBy({ 'metadata.rating': -1, clients: -1 });
+```
+
+### Multiple sort criteria
+
+```typescript
+app.define('ranked_room', RankedRoom)
+  .filterBy(['tier'])
+  .sortBy({ 'metadata.skillLevel': 1, clients: -1 });
+```
+
+Multiple criteria are evaluated in key order: the first key is the primary sort, subsequent keys break ties.
+
+## Setting metadata in onCreate
+
+Set the initial metadata inside `onCreate` so the values are stored before any client can join:
+
+```typescript
+import { Room } from '@colyseus/core';
+
+interface GameRoomMetadata {
+  map: string;
+  difficulty: string;
+  round: number;
+}
+
+class GameRoom extends Room<any, GameRoomMetadata> {
+  onCreate(options: any) {
+    this.setMetadata({
+      map: options.map ?? 'default',
+      difficulty: options.difficulty ?? 'normal',
+      round: 1,
+    });
+  }
+}
+```
+
+`setMetadata` merges the provided object into any existing metadata — it does **not** replace the entire object.
+
+## Updating room listing at runtime
+
+Use `setMatchmaking` to update the room listing while the room is running. It accepts any combination of `metadata`, `private`, `locked`, and `maxClients`, and persists all changes in a single operation:
+
+```typescript
+class GameRoom extends Room {
+  async onRoundEnd() {
+    // Update metadata and unlock the room for the next round
+    await this.setMatchmaking({
+      metadata: { ...this.metadata, round: this.metadata.round + 1 },
+      locked: false,
+    });
+  }
+}
+```
+
+<Tip>
+  Prefer `setMatchmaking` over calling `setMetadata`, `lock`, or `unlock` separately when you need to change multiple properties — it issues a single driver update instead of one per property.
+</Tip>
+
+### setMatchmaking parameter reference
+
+<ParamField path="metadata" type="object">
+  Partial metadata to merge into the room's existing metadata.
+</ParamField>
+
+<ParamField path="private" type="boolean">
+  Whether the room should be hidden from lobby listings.
+</ParamField>
+
+<ParamField path="locked" type="boolean">
+  Lock (`true`) or unlock (`false`) the room explicitly. A locked room rejects new joiners.
+</ParamField>
+
+<ParamField path="maxClients" type="number">
+  Update the maximum number of clients allowed. The room is automatically locked if the current client count reaches the new limit, and unlocked if the limit is raised above the current count.
+</ParamField>
+
+## lock and unlock
+
+You can also lock and unlock a room independently:
+
+```typescript
+// Prevent new clients from joining
+await this.lock();
+
+// Allow new clients again
+await this.unlock();
+```
+
+Calling `lock()` or `unlock()` directly persists the state to the driver and emits the appropriate event to any active `LobbyRoom` subscriptions.
+
+## Full example
+
+```typescript
+import { Room } from '@colyseus/core';
+
+interface Meta { map: string; mode: string; players: number; }
+
+class LobbyGameRoom extends Room<any, Meta> {
+  onCreate(options: any) {
+    // Set metadata for filtering
+    this.setMetadata({
+      map: options.map,
+      mode: options.mode,
+      players: 0,
+    });
+  }
+
+  onJoin() {
+    // Track player count in metadata for lobby display
+    this.setMetadata({ players: this.clients.length });
+  }
+
+  onLeave() {
+    this.setMetadata({ players: this.clients.length });
+  }
+}
+
+// Register with filter + sort
+app.define('lobby_game', LobbyGameRoom)
+  .filterBy(['map', 'mode'])
+  .sortBy({ clients: -1 });
+```

@@ -1,0 +1,279 @@
+---
+title: "State Synchronization"
+description: "How Colyseus uses @colyseus/schema to encode and broadcast delta patches of room state to every client."
+---
+
+Colyseus synchronizes room state automatically using `@colyseus/schema`, a binary serialization library built for real-time multiplayer. Only the fields that change between ticks are sent to clients, keeping bandwidth usage low even with large state objects.
+
+## How it works
+
+<Steps>
+  <Step title="Define a schema class">
+    Annotate your state class with `@type` decorators to declare which fields should be tracked and synchronized.
+  </Step>
+  <Step title="Assign state in onCreate">
+    Set `this.state = new MyState()` inside `onCreate`. Colyseus detects the schema instance and activates the `SchemaSerializer`.
+  </Step>
+  <Step title="Mutate state anywhere">
+    Update state properties from lifecycle hooks, message handlers, or the simulation interval. Changes are tracked automatically.
+  </Step>
+  <Step title="Patch broadcast on every tick">
+    At each `patchRate` interval (default 50 ms / 20 fps) Colyseus computes a binary diff of the state tree and sends it to each connected client.
+  </Step>
+  <Step title="Client receives onChange callbacks">
+    On the client side, `@colyseus/schema` applies the patch and fires `onChange` callbacks for each mutated field.
+  </Step>
+</Steps>
+
+## Defining a state class
+
+```typescript
+import { Schema, type, MapSchema, ArraySchema } from "@colyseus/schema";
+
+class Player extends Schema {
+  @type("string") name: string = "";
+  @type("float32") x: number = 0;
+  @type("float32") y: number = 0;
+  @type("int32") health: number = 100;
+  @type("boolean") alive: boolean = true;
+}
+
+class GameState extends Schema {
+  @type({ map: Player }) players = new MapSchema<Player>();
+  @type("int32") round: number = 1;
+  @type("string") phase: string = "waiting";
+}
+```
+
+<Note>
+Only properties annotated with `@type` are synchronized. Plain JavaScript properties (without `@type`) exist only on the server and are never sent to clients.
+</Note>
+
+## Supported primitive types
+
+| Type string | JS type | Size |
+|---|---|---|
+| `"string"` | `string` | variable (UTF-8) |
+| `"boolean"` | `boolean` | 1 bit |
+| `"int8"` / `"uint8"` | `number` | 1 byte |
+| `"int16"` / `"uint16"` | `number` | 2 bytes |
+| `"int32"` / `"uint32"` | `number` | 4 bytes |
+| `"float32"` | `number` | 4 bytes |
+| `"float64"` | `number` | 8 bytes |
+| `"int64"` / `"uint64"` | `bigint` | 8 bytes |
+| `"number"` | `number` | variable (auto-detected) |
+
+## Assigning state in `onCreate`
+
+```typescript
+import { Room } from "@colyseus/core";
+import { GameState } from "./GameState";
+
+class GameRoom extends Room<{ state: GameState }> {
+  onCreate(options: any) {
+    // Assigning a Schema instance activates delta-patch serialization
+    this.state = new GameState();
+
+    this.state.phase = "waiting";
+  }
+}
+```
+
+Once assigned, you can mutate `this.state` freely—Colyseus tracks all changes and sends only the diff.
+
+## Patch rate
+
+The default patch rate is **50 ms (20 fps)**. You can change it per room:
+
+```typescript
+onCreate() {
+  this.state = new GameState();
+
+  // Send patches at 10fps
+  this.patchRate = 1000 / 10;
+
+  // Disable automatic patching (you must call broadcastPatch() manually)
+  this.patchRate = null;
+}
+```
+
+When you need full control, call `this.broadcastPatch()` manually:
+
+```typescript
+onCreate() {
+  this.patchRate = null;
+
+  this.setSimulationInterval(() => {
+    this.state.world.tick();
+
+    if (this.state.world.hasChanged) {
+      this.broadcastPatch();
+    }
+  }, 1000 / 60);
+}
+```
+
+## Delta encoding
+
+Colyseus uses a change-tracking system built into `@colyseus/schema`. Each `Schema` instance maintains an internal change set. When `broadcastPatch()` runs:
+
+1. `onBeforePatch(state)` fires (if defined).
+2. The change set is serialized into a compact binary format using msgpack-based encoding.
+3. The binary patch is broadcast to all clients.
+4. The change set is cleared, ready for the next tick.
+
+Only fields that have actually changed since the last patch are included. If nothing changed, no data is sent.
+
+## Collections
+
+`@colyseus/schema` provides three collection types that support delta synchronization:
+
+### `MapSchema<T>`
+
+An ordered map keyed by string. Ideal for player registries.
+
+```typescript
+@type({ map: Player }) players = new MapSchema<Player>();
+
+// Adding
+this.state.players.set(client.sessionId, new Player());
+
+// Removing
+this.state.players.delete(client.sessionId);
+
+// Iterating
+for (const [id, player] of this.state.players) {
+  console.log(id, player.name);
+}
+```
+
+### `ArraySchema<T>`
+
+An ordered array. Best for fixed-size collections or ordered lists.
+
+```typescript
+@type(["string"]) chat = new ArraySchema<string>();
+
+this.state.chat.push("Hello!");
+this.state.chat.splice(0, 1); // remove first element
+```
+
+### `SetSchema<T>`
+
+An unordered unique set of primitive values.
+
+```typescript
+@type({ set: "string" }) activePowerUps = new SetSchema<string>();
+
+this.state.activePowerUps.add("shield");
+this.state.activePowerUps.delete("shield");
+```
+
+## Client-side: receiving state changes
+
+On the client side (JavaScript / TypeScript SDK), you listen to state changes using `onChange` callbacks:
+
+```typescript
+// Connect to the room
+const room = await client.joinOrCreate("game");
+
+// Listen to all state changes (fires on every patch)
+room.onStateChange((state) => {
+  renderGameState(state);
+});
+
+// Listen to changes on a nested schema
+room.state.players.onAdd((player, sessionId) => {
+  addPlayerSprite(sessionId, player);
+
+  // Track individual field changes
+  player.onChange(() => {
+    updatePlayerPosition(sessionId, player.x, player.y);
+  });
+});
+
+room.state.players.onRemove((player, sessionId) => {
+  removePlayerSprite(sessionId);
+});
+```
+
+<Tip>
+For performance-sensitive games, prefer `player.onChange` callbacks on individual schema objects over the top-level `room.onStateChange`, which fires for every single change in the entire state tree.
+</Tip>
+
+## Binary encoding
+
+Patches are encoded in a compact binary format based on msgpack. Compared to JSON:
+
+- Field names are encoded as numeric indices, not strings.
+- Only changed fields are included in the payload.
+- Primitive types use fixed-width binary representations.
+
+This makes Colyseus state patches significantly smaller than equivalent JSON diffs, especially for frequently updated numeric fields like positions and health values.
+
+## Complete example
+
+```typescript
+// --- server side ---
+import { Schema, type, MapSchema } from "@colyseus/schema";
+import { Room, Client } from "@colyseus/core";
+
+class Player extends Schema {
+  @type("string") name = "";
+  @type("float32") x = 0;
+  @type("float32") y = 0;
+}
+
+class GameState extends Schema {
+  @type({ map: Player }) players = new MapSchema<Player>();
+  @type("string") phase = "waiting";
+}
+
+class GameRoom extends Room<{ state: GameState }> {
+  onCreate() {
+    this.state = new GameState();
+
+    this.onMessage("move", (client, data: { x: number; y: number }) => {
+      const player = this.state.players.get(client.sessionId);
+      if (player) {
+        player.x = data.x; // tracked, will be in the next patch
+        player.y = data.y;
+      }
+    });
+  }
+
+  onJoin(client: Client) {
+    const player = new Player();
+    player.name = client.auth?.username ?? "Anonymous";
+    this.state.players.set(client.sessionId, player);
+  }
+
+  onLeave(client: Client) {
+    this.state.players.delete(client.sessionId);
+  }
+}
+```
+
+```typescript
+// --- client side (browser / Node.js) ---
+import Colyseus from "colyseus.js";
+
+const client = new Colyseus.Client("ws://localhost:2567");
+const room = await client.joinOrCreate("game");
+
+room.state.players.onAdd((player, sessionId) => {
+  console.log("player joined:", sessionId);
+  player.onChange(() => {
+    console.log(sessionId, "moved to", player.x, player.y);
+  });
+});
+
+room.state.players.onRemove((_player, sessionId) => {
+  console.log("player left:", sessionId);
+});
+
+// Send input
+document.addEventListener("keydown", (e) => {
+  room.send("move", { x: playerX, y: playerY });
+});
+```

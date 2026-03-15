@@ -1,0 +1,184 @@
+---
+title: "Server Installation"
+description: "Install Colyseus on Node.js, understand package options, configure environment variables, and deploy to production."
+---
+
+## Requirements
+
+- **Node.js >= 20** (LTS recommended)
+- npm >= 9, yarn >= 1.22, or pnpm >= 8
+
+<Warning>
+  Node.js versions below 20 are not supported. Colyseus uses modern ESM features
+  and native TypeScript stripping that require Node.js 20+.
+</Warning>
+
+## Installation
+
+Colyseus is published as two complementary package sets:
+
+<Tabs>
+  <Tab title="Bundle (recommended)">
+    The `colyseus` package is a convenience bundle that re-exports `@colyseus/core` and `@colyseus/ws-transport`. It is the simplest way to get started:
+
+    <CodeGroup>
+      ```bash npm
+      npm install colyseus
+      ```
+
+      ```bash yarn
+      yarn add colyseus
+      ```
+
+      ```bash pnpm
+      pnpm add colyseus
+      ```
+    </CodeGroup>
+  </Tab>
+  <Tab title="Individual packages">
+    Install the core and a transport separately for finer control over dependencies or to use an alternative transport:
+
+    <CodeGroup>
+      ```bash npm
+      npm install @colyseus/core @colyseus/ws-transport
+      ```
+
+      ```bash yarn
+      yarn add @colyseus/core @colyseus/ws-transport
+      ```
+
+      ```bash pnpm
+      pnpm add @colyseus/core @colyseus/ws-transport
+      ```
+    </CodeGroup>
+  </Tab>
+</Tabs>
+
+### Optional packages
+
+| Package | Purpose |
+|---------|---------|
+| `@colyseus/tools` | Dev/prod helper (`config()`, `listen()`), PM2 integration, `.env` loading |
+| `@colyseus/schema` | Synchronized state (binary delta encoding) |
+| `@colyseus/monitor` | Admin dashboard UI |
+| `@colyseus/playground` | In-browser room tester |
+| `@colyseus/auth` | JWT + OAuth helpers |
+| `@colyseus/uwebsockets-transport` | High-performance uWebSockets.js transport |
+| `@colyseus/bun-websockets` | Native Bun WebSocket transport |
+| `@colyseus/redis-driver` | Redis-backed MatchMaker driver for horizontal scaling |
+| `@colyseus/redis-presence` | Redis-backed Presence for cross-process pub/sub |
+
+## Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `2567` | Port the server listens on (used by `@colyseus/tools`). |
+| `NODE_ENV` | `"development"` | Set to `"production"` to disable development-only features. |
+| `COLYSEUS_SEAT_RESERVATION_TIME` | `15` | Seconds a seat is reserved for a client before `onJoin` must complete. |
+| `NODE_APP_INSTANCE` | `0` | PM2 instance index. `@colyseus/tools` adds this to `PORT` so each process binds to a unique port. |
+| `REDIS_URI` | — | URI passed to `RedisDriver` / `RedisPresence` when auto-configured on Colyseus Cloud. |
+
+```bash .env
+PORT=2567
+NODE_ENV=production
+COLYSEUS_SEAT_RESERVATION_TIME=30
+```
+
+<Note>
+  `@colyseus/tools` automatically loads `.env` at startup via `dotenv`. You do
+  not need to call `dotenv.config()` yourself.
+</Note>
+
+## Minimal server (no tooling)
+
+If you prefer to wire everything manually:
+
+```typescript src/index.ts
+import { defineServer, defineRoom } from "@colyseus/core";
+import { MyRoom } from "./MyRoom.js";
+
+const server = defineServer({
+  rooms: {
+    my_room: defineRoom(MyRoom),
+  },
+});
+
+server.listen(2567).then(() => {
+  console.log("Listening on http://localhost:2567");
+}).catch((err) => {
+  console.error("Error starting server", err);
+});
+```
+
+## Server with `@colyseus/tools`
+
+`@colyseus/tools` is the recommended entry point for real projects. It handles transport selection (Node.js vs Bun), multi-process port offsets, graceful shutdown, and Colyseus Cloud integration:
+
+```typescript src/app.config.ts
+import config, { listen } from "@colyseus/tools";
+import { defineRoom } from "@colyseus/core";
+import { MyRoom } from "./MyRoom.js";
+
+export const server = config({
+  options: {
+    // devMode restores rooms on server restart (development only)
+    devMode: process.env.NODE_ENV !== "production",
+  },
+
+  rooms: {
+    my_room: defineRoom(MyRoom),
+  },
+
+  initializeExpress: (app) => {
+    // Add Express middleware / routes
+    app.get("/health", (_req, res) => res.json({ ok: true }));
+  },
+});
+
+listen(server);
+```
+
+## Docker deployment
+
+```dockerfile Dockerfile
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+COPY . .
+RUN npm run build
+
+EXPOSE 2567
+CMD ["node", "build/app.config.js"]
+```
+
+```yaml docker-compose.yml
+services:
+  gameserver:
+    build: .
+    ports:
+      - "2567:2567"
+    environment:
+      NODE_ENV: production
+      PORT: 2567
+```
+
+## PM2 deployment
+
+`@colyseus/tools` ships a ready-made `ecosystem.config.cjs` for PM2. To run one process per CPU core:
+
+```bash
+npm install -g pm2
+pm2 start ecosystem.config.cjs
+```
+
+Each PM2 instance receives a unique `NODE_APP_INSTANCE` value, causing `@colyseus/tools` to bind each process to a different port (`2567`, `2568`, `2569`, …). A reverse proxy (nginx, Caddy, Traefik) distributes connections across all ports.
+
+<Tip>
+  For multi-server horizontal scaling, also install `@colyseus/redis-driver` and
+  `@colyseus/redis-presence` and configure `REDIS_URI` so all processes share the
+  same room registry.
+</Tip>

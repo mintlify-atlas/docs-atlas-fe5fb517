@@ -1,0 +1,278 @@
+---
+title: Server
+description: Complete reference for the Colyseus Server class, defineServer(), and defineRoom() factory functions.
+---
+
+The `Server` class is the entry point for every Colyseus application. Use `defineServer()` to create a typed server instance, and `defineRoom()` to register room handlers.
+
+## `defineServer(options)`
+
+Creates and configures a `Server` instance. This is the recommended way to create a Colyseus server.
+
+```typescript
+import { defineServer, defineRoom } from "@colyseus/core";
+import { WebSocketTransport } from "@colyseus/ws-transport";
+import { MyRoom } from "./rooms/MyRoom";
+
+const server = defineServer({
+  rooms: {
+    my_room: defineRoom(MyRoom),
+  },
+});
+
+server.listen(2567);
+```
+
+### Options
+
+<ParamField path="rooms" type="Record<string, RegisteredHandler>" required>
+  A map of room names to registered room handlers. Use `defineRoom()` to create each handler.
+</ParamField>
+
+<ParamField path="routes" type="Router">
+  A custom router to add HTTP endpoints to the server. Created with `createRouter()`.
+</ParamField>
+
+<ParamField path="transport" type="Transport">
+  The transport layer to use. Defaults to `WebSocketTransport` from `@colyseus/ws-transport` when the package is installed.
+</ParamField>
+
+<ParamField path="presence" type="Presence">
+  The presence backend. Defaults to `LocalPresence`. Use `RedisPresence` from `@colyseus/redis-presence` to enable multi-process support.
+</ParamField>
+
+<ParamField path="driver" type="MatchMakerDriver">
+  The matchmaker storage driver. Defaults to `LocalDriver`. Use `RedisDriver` or `MongooseDriver` for multi-process deployments.
+</ParamField>
+
+<ParamField path="publicAddress" type="string">
+  The public host/address of this server process. Clients use this address when the server runs behind a load balancer.
+</ParamField>
+
+<ParamField path="gracefullyShutdown" type="boolean" default="true">
+  When `true`, the server registers SIGTERM/SIGINT handlers and performs a graceful shutdown automatically.
+</ParamField>
+
+<ParamField path="devMode" type="boolean" default="false">
+  Enables development mode. Rooms are restored on restart and clients automatically reconnect after a server reboot. Not suitable for production.
+</ParamField>
+
+<ParamField path="greet" type="boolean" default="true">
+  Controls whether the Colyseus greeting banner is printed on server start.
+</ParamField>
+
+<ParamField path="logger" type="any">
+  A custom logger instance. Must be compatible with the `console` interface.
+</ParamField>
+
+<ParamField path="beforeListen" type="() => Promise<void> | void">
+  An async callback executed before the server begins listening. Use this to connect to a database or external services.
+
+  ```typescript
+  beforeListen: async () => {
+    await mongoose.connect(process.env.MONGO_URI);
+  }
+  ```
+</ParamField>
+
+<ParamField path="express" type="(app: express.Application) => void">
+  A callback that receives an Express-compatible application to configure custom HTTP routes. For the uWebSockets transport, this uses the `uwebsockets-express` adapter.
+
+  ```typescript
+  express: (app) => {
+    app.get("/healthz", (req, res) => res.send("ok"));
+  }
+  ```
+</ParamField>
+
+<ParamField path="selectProcessIdToCreateRoom" type="(roomName: string, clientOptions: any) => Promise<string>">
+  A custom function that selects which server process should handle room creation. Defaults to the process with the fewest rooms.
+</ParamField>
+
+<ParamField path="isStandaloneMatchMaker" type="boolean" default="false">
+  When `true`, this process acts as a dedicated matchmaker and does not spawn rooms.
+</ParamField>
+
+---
+
+## `defineRoom(RoomClass, defaultOptions?)`
+
+Registers a room class with optional default options. The returned `RegisteredHandler` is passed to `defineServer({ rooms: { ... } })`.
+
+```typescript
+import { defineRoom } from "@colyseus/core";
+import { MyRoom } from "./rooms/MyRoom";
+
+const myRoomHandler = defineRoom(MyRoom, {
+  maxClients: 4,
+});
+```
+
+<ParamField path="RoomClass" type="typeof Room" required>
+  The `Room` subclass to register.
+</ParamField>
+
+<ParamField path="defaultOptions" type="object">
+  Default options passed to `onCreate()`. These are merged with client-provided options at room creation time.
+</ParamField>
+
+### `RegisteredHandler` options
+
+The handler returned by `defineRoom()` exposes chainable configuration methods.
+
+#### `.filterBy(fields)`
+
+Filters rooms during matchmaking by the specified option fields. Only rooms whose stored values match the client-provided values will be eligible.
+
+```typescript
+defineRoom(MyRoom).filterBy(["difficulty", "mode"]);
+```
+
+<ParamField path="fields" type="string[]" required>
+  An array of option key names to use as matchmaking filters.
+</ParamField>
+
+#### `.sortBy(options)`
+
+Sorts available rooms returned by the driver query.
+
+```typescript
+defineRoom(MyRoom)
+  .filterBy(["difficulty"])
+  .sortBy({ clients: -1 }); // prefer fuller rooms
+```
+
+<ParamField path="options" type="Record<string, 1 | -1>" required>
+  Keys are room fields; values are `1` (ascending) or `-1` (descending).
+</ParamField>
+
+#### `.enableRealtimeListing()`
+
+Pushes real-time room listing updates to connected lobby rooms. Required if you use `LobbyRoom`.
+
+```typescript
+defineRoom(MyRoom).enableRealtimeListing();
+```
+
+---
+
+## `Server` class
+
+### Properties
+
+<ResponseField name="transport" type="Transport">
+  The active transport layer instance (e.g., `WebSocketTransport`).
+</ResponseField>
+
+<ResponseField name="router" type="Router">
+  The router instance attached to this server, used to define and dispatch HTTP endpoints.
+</ResponseField>
+
+<ResponseField name="options" type="ServerOptions">
+  The resolved options object passed at construction time.
+</ResponseField>
+
+<ResponseField name="presence" type="Presence">
+  The presence backend used for pub/sub and shared state. Accessible as a protected property — use `matchMaker.presence` for direct access from outside.
+</ResponseField>
+
+<ResponseField name="driver" type="MatchMakerDriver">
+  The matchmaker storage driver. Use `matchMaker.driver` for direct access.
+</ResponseField>
+
+### Methods
+
+#### `server.listen(port, hostname?, backlog?, callback?)`
+
+Binds the server to the given port and begins accepting connections.
+
+```typescript
+await server.listen(2567);
+// or with a Unix socket path
+await server.listen("/tmp/colyseus.sock");
+```
+
+<ParamField path="port" type="number | string" required>
+  TCP port number or Unix socket path to listen on.
+</ParamField>
+
+<ParamField path="hostname" type="string">
+  Optional hostname to bind to.
+</ParamField>
+
+<ParamField path="backlog" type="number">
+  Maximum connection backlog queue length.
+</ParamField>
+
+<ParamField path="callback" type="Function">
+  Called when the server is ready, or on error.
+</ParamField>
+
+#### `server.simulateLatency(milliseconds)`
+
+Adds artificial round-trip latency between clients and the server. Applies both to outgoing transport and incoming messages.
+
+<Warning>
+For development and testing only. Never use in production.
+</Warning>
+
+```typescript
+server.simulateLatency(200); // 200ms round-trip
+server.simulateLatency(0);   // disable
+```
+
+<ParamField path="milliseconds" type="number" required>
+  Total round-trip latency in milliseconds. Set to `0` to disable.
+</ParamField>
+
+#### `server.gracefullyShutdown(exit?, err?)`
+
+Initiates a graceful shutdown: locks all rooms, waits for them to dispose, shuts down the transport and presence layers, then exits the process.
+
+```typescript
+await server.gracefullyShutdown();
+```
+
+<ParamField path="exit" type="boolean" default="true">
+  Whether to call `process.exit()` after shutdown completes.
+</ParamField>
+
+<ParamField path="err" type="Error">
+  If provided and not in dev mode, the process exits with code `1`.
+</ParamField>
+
+#### `server.onShutdown(callback)`
+
+Registers a callback invoked after all rooms are disposed and the transport is shut down.
+
+```typescript
+server.onShutdown(async () => {
+  await db.disconnect();
+});
+```
+
+#### `server.onBeforeShutdown(callback)`
+
+Registers a callback invoked before rooms are locked and disposed during shutdown.
+
+```typescript
+server.onBeforeShutdown(async () => {
+  // save game state before rooms close
+});
+```
+
+#### `server.define(name, RoomClass, defaultOptions?)`
+
+Alternative imperative API for registering a room type. Prefer `defineServer({ rooms: {...} })` for type safety.
+
+```typescript
+server.define("my_room", MyRoom, { maxClients: 4 });
+```
+
+#### `server.removeRoomType(name)`
+
+Removes a room type from matchmaking. Does not destroy existing room instances — only prevents new rooms of that type from being created.
+
+```typescript
+server.removeRoomType("my_room");
+```

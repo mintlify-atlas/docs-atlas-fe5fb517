@@ -1,0 +1,118 @@
+---
+title: "GameMaker"
+description: "Use the Colyseus SDK in GameMaker Studio 2 with GML. Download the extension, connect to a room, and exchange messages."
+---
+
+## Installation
+
+<Steps>
+  <Step title="Download the extension">
+    Download the latest GameMaker SDK from GitHub Releases:
+
+    ```
+    https://github.com/colyseus/native-sdk/releases?q=gamemaker+sdk&expanded=true
+    ```
+  </Step>
+  <Step title="Import into GameMaker">
+    In GameMaker Studio 2, open your project. Go to **Tools → Import Local Package** and select the downloaded `.yymps` file. Accept all resources.
+  </Step>
+  <Step title="Initialize the SDK">
+    Call the Colyseus initialization function early in your game (e.g. in a persistent controller object's **Create** event).
+  </Step>
+</Steps>
+
+---
+
+## Connecting to a server (GML)
+
+```gml
+// Create event of a controller object
+global.client = colyseus_client_create("ws://localhost:2567");
+```
+
+---
+
+## Joining a room
+
+```gml
+// Async — listen for the result in the Async – Networking event
+colyseus_join_or_create(global.client, "game", {});
+```
+
+In the **Async – Networking** event:
+
+```gml
+var event_type = async_load[? "type"];
+
+switch (event_type)
+{
+    case COLYSEUS_EVENT.ROOM_JOINED:
+        global.room = async_load[? "room"];
+        show_debug_message("Joined room: " + colyseus_room_get_id(global.room));
+        break;
+
+    case COLYSEUS_EVENT.ROOM_ERROR:
+        var code    = async_load[? "code"];
+        var message = async_load[? "message"];
+        show_debug_message("Error [" + string(code) + "]: " + message);
+        break;
+}
+```
+
+---
+
+## Receiving state changes
+
+```gml
+// In Async – Networking event
+case COLYSEUS_EVENT.STATE_CHANGE:
+    var state = async_load[? "state"];
+    // Access state properties
+    show_debug_message("Tick: " + string(state[? "tick"]));
+    break;
+```
+
+---
+
+## Sending messages
+
+```gml
+// Send a message with a ds_map payload
+var payload = ds_map_create();
+ds_map_add(payload, "x", x);
+ds_map_add(payload, "y", y);
+colyseus_room_send(global.room, "move", payload);
+ds_map_destroy(payload);
+```
+
+---
+
+## Receiving messages
+
+```gml
+// In Async – Networking event
+case COLYSEUS_EVENT.MESSAGE:
+    var msg_type    = async_load[? "message_type"];
+    var msg_payload = async_load[? "payload"];
+    show_debug_message("Got message: " + msg_type);
+    break;
+```
+
+---
+
+## Leaving a room
+
+```gml
+// Game End event or when leaving a scene
+colyseus_room_leave(global.room);
+colyseus_client_destroy(global.client);
+```
+
+---
+
+## Platform considerations
+
+- The GameMaker SDK requires GameMaker Studio 2.3 or later.
+- All Colyseus callbacks are delivered through GameMaker's **Async – Networking** event.
+- Use `ds_map` structures to build payloads; the SDK handles JSON/msgpack serialization internally.
+- The extension includes Windows, macOS, Linux, Android, and iOS targets. HTML5 export uses the browser WebSocket API.

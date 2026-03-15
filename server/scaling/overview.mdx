@@ -1,0 +1,83 @@
+---
+title: Scaling Overview
+description: Scale your Colyseus server across multiple processes and machines using Redis.
+---
+
+By default, Colyseus runs in a single Node.js process with in-memory Presence and a local matchmaking Driver. This works well during development and for small deployments, but as player counts grow you will need to spread the load across multiple processes or machines.
+
+## Single process vs. multi-process
+
+| Concern | Single process | Multi-process |
+|---------|---------------|---------------|
+| Presence (pub/sub) | `LocalPresence` (in-memory) | `RedisPresence` |
+| Matchmaking Driver | Local (in-memory) | `RedisDriver` |
+| Room creation | Always on the same process | Distributed via matchmaker |
+| Fault tolerance | Single point of failure | Process crashes are isolated |
+
+## The role of Presence and Driver
+
+Colyseus separates two concerns when scaling:
+
+**Presence** — a pub/sub and key-value store used for cross-process messaging, room state serialisation, and token invalidation. In single-process mode this lives in memory; in multi-process mode it is backed by Redis.
+
+**Driver** — the room registry. It stores and queries the list of available rooms so any process can route a `joinOrCreate` request to the correct process and room. In single-process mode rooms are tracked in memory; in multi-process mode the registry is stored in Redis.
+
+## Architecture with Redis
+
+```
+┌─────────────────────────────────────────┐
+│               Load Balancer             │
+│          (nginx / AWS ALB / …)          │
+└────────┬─────────────┬──────────────────┘
+         │             │
+ ┌───────▼──────┐ ┌────▼─────────┐
+ │  Node.js     │ │  Node.js     │   …more processes
+ │  Process 1   │ │  Process 2   │
+ │  (Colyseus)  │ │  (Colyseus)  │
+ └──────┬───────┘ └──────┬───────┘
+        │                │
+        └───────┬────────┘
+                │
+        ┌───────▼───────┐
+        │     Redis     │
+        │  (Presence +  │
+        │   Driver)     │
+        └───────────────┘
+```
+
+Every Colyseus process connects to the same Redis instance. The matchmaker uses the Driver to find or create rooms across processes, and Presence carries pub/sub messages between them.
+
+## Quick setup
+
+```typescript
+import { Server } from "colyseus";
+import { RedisPresence } from "@colyseus/redis-presence";
+import { RedisDriver } from "@colyseus/redis-driver";
+
+const gameServer = new Server({
+  presence: new RedisPresence(),
+  driver: new RedisDriver(),
+});
+
+gameServer.define("game", GameRoom);
+gameServer.listen(2567);
+```
+
+With this configuration you can run as many Node.js processes as needed — each one will share the same room registry and pub/sub bus through Redis.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Redis Presence" href="/server/scaling/redis-presence">
+    Configure the pub/sub and key-value layer for cross-process messaging.
+  </Card>
+  <Card title="Redis Driver" href="/server/scaling/redis-driver">
+    Configure the distributed room registry.
+  </Card>
+  <Card title="Load Balancing" href="/server/scaling/load-balancing">
+    PM2, nginx sticky sessions, and process selection strategies.
+  </Card>
+  <Card title="Presence API" href="/server/presence">
+    Full reference for the Presence interface used inside rooms.
+  </Card>
+</CardGroup>

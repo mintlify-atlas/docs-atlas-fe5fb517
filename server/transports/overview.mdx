@@ -1,0 +1,57 @@
+---
+title: Transports Overview
+description: Choose the right WebSocket transport for your Colyseus server.
+---
+
+Colyseus ships with multiple transport backends. All of them implement the same `Transport` interface, so switching between them only requires changing the `Server` constructor options — your room code stays the same.
+
+## Available transports
+
+<CardGroup cols={2}>
+  <Card title="WebSocket (ws)" href="/server/transports/ws-transport">
+    Default transport. Uses the `ws` package. Works on any Node.js version. Best for compatibility.
+  </Card>
+  <Card title="uWebSockets" href="/server/transports/uwebsockets-transport">
+    C++ WebSocket implementation. Higher throughput and lower memory usage than `ws`. Recommended for production.
+  </Card>
+  <Card title="Bun WebSockets" href="/server/transports/bun-websockets">
+    Native Bun runtime WebSocket support. Use when running Colyseus under the Bun JavaScript runtime.
+  </Card>
+</CardGroup>
+
+## Choosing a transport
+
+| Transport | Runtime | Performance | Ease of use |
+|-----------|---------|------------|-------------|
+| `WebSocketTransport` | Node.js | Baseline | No extra deps |
+| `uWebSocketsTransport` | Node.js | High (native C++) | Requires native addon |
+| `BunWebSockets` | Bun | High (native) | Requires Bun runtime |
+
+**Use `ws` (default)** when:
+- You are prototyping or running in development.
+- Your deployment environment does not support native modules.
+- You need maximum compatibility across hosting providers.
+
+**Use `uWebSockets`** when:
+- You need the highest message throughput per process.
+- You are running Node.js in production on Linux.
+- Memory and CPU efficiency matter at scale.
+
+**Use `BunWebSockets`** when:
+- You have migrated your project to the Bun runtime.
+
+## The Transport interface
+
+Every transport implements the following internal methods. You do not normally call these directly; the `Server` class manages them.
+
+```typescript
+abstract class Transport {
+  server: http.Server;
+  listen(port: number, hostname?: string, backlog?: number, listeningListener?: () => void): this;
+  shutdown(): void;
+  simulateLatency(milliseconds: number): void;
+  getExpressApp(): express.Application | Promise<express.Application>;
+}
+```
+
+Because all transports share the same interface, you can attach Express middleware, define custom HTTP routes, and mount authentication regardless of which transport you choose.

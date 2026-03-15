@@ -1,0 +1,145 @@
+---
+title: Load Balancing
+description: Run Colyseus across multiple processes with PM2, nginx sticky sessions, and custom process selection.
+---
+
+When running multiple Colyseus processes, every WebSocket connection for a given room must reach the **same process** that hosts that room. This requires sticky sessions at the load-balancer level.
+
+## PM2 cluster mode
+
+[PM2](https://pm2.keymetrics.io/) is the most common way to run multiple Node.js processes on a single machine.
+
+<Steps>
+  <Step title="Install PM2">
+    ```bash
+    npm install -g pm2
+    ```
+  </Step>
+
+  <Step title="Create an ecosystem file">
+    ```javascript
+    // ecosystem.config.cjs
+    module.exports = {
+      apps: [{
+        name: "colyseus",
+        script: "dist/index.js",
+        instances: 4,           // or "max" to use all CPU cores
+        exec_mode: "cluster",
+        env: {
+          NODE_ENV: "production",
+          PORT: 2567,
+          REDIS_HOST: "127.0.0.1",
+        },
+      }],
+    };
+    ```
+  </Step>
+
+  <Step title="Start the cluster">
+    ```bash
+    pm2 start ecosystem.config.cjs
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  In PM2 cluster mode, each worker process listens on the same port. PM2 load-balances HTTP traffic internally, but it does **not** guarantee sticky sessions for WebSocket upgrades. Use nginx or another reverse proxy to enforce stickiness.
+</Warning>
+
+## nginx sticky session configuration
+
+ngingx's `ip_hash` directive routes all requests from the same client IP to the same upstream server:
+
+```nginx
+upstream colyseus {
+    ip_hash;  # sticky sessions by client IP
+    server 127.0.0.1:2567;
+    server 127.0.0.1:2568;
+    server 127.0.0.1:2569;
+    server 127.0.0.1:2570;
+}
+
+server {
+    listen 80;
+    server_name game.example.com;
+
+    location / {
+        proxy_pass http://colyseus;
+
+        # WebSocket upgrade
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+}
+```
+
+<Note>
+  Cookie-based stickiness (`sticky` module) is more reliable than `ip_hash` for clients behind NAT. See the nginx documentation for the `sticky` module setup.
+</Note>
+
+## `publicAddress` option
+
+When a client calls `joinOrCreate`, the matchmaker returns the address the client should connect to. Set `publicAddress` so each process advertises the correct host:
+
+```typescript
+import { Server } from "colyseus";
+
+const gameServer = new Server({
+  publicAddress: `wss://game.example.com/node-${process.env.NODE_APP_INSTANCE}`,
+});
+```
+
+For multiple processes behind a single load balancer, `publicAddress` should be the load-balancer URL — the matchmaker will pass a `processId` path segment so the balancer can route the WebSocket upgrade correctly.
+
+## Custom process selection
+
+By default, Colyseus picks the process with the lowest number of rooms when creating a new room. Override this with `selectProcessIdToCreateRoom`:
+
+```typescript
+import { Server, matchMaker } from "colyseus";
+
+const gameServer = new Server({
+  driver: new RedisDriver(),
+
+  // Pin a specific room type to specific processes
+  selectProcessIdToCreateRoom: async (roomName, clientOptions) => {
+    const processes = await matchMaker.stats.getAllProcesses();
+
+    if (roomName === "ranked") {
+      // Only use processes 0 and 1 for ranked matches
+      const rankedProcesses = processes.slice(0, 2);
+      return rankedProcesses[Math.floor(Math.random() * rankedProcesses.length)].processId;
+    }
+
+    // Default: least loaded process
+    return processes.sort((a, b) => a.rooms - b.rooms)[0].processId;
+  },
+});
+```
+
+## Standalone matchmaker
+
+For very large deployments you may want to run a dedicated matchmaker process that handles room listings without hosting any rooms itself:
+
+```typescript
+const gameServer = new Server({
+  presence: new RedisPresence(),
+  driver: new RedisDriver(),
+
+  // This process only routes matchmaking, does not host rooms
+  isStandaloneMatchMaker: true,
+});
+
+gameServer.listen(3000); // separate port for matchmaking API
+```
+
+<Tip>
+  The standalone matchmaker pattern is useful when you want to decouple your HTTP matchmaking API from your WebSocket game processes.
+</Tip>

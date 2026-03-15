@@ -1,0 +1,163 @@
+---
+title: Schema decorators
+description: Reference for all @colyseus/schema decorators — @type, @filter, @filterChildren, and @deprecated.
+---
+
+Decorators tell the Schema serializer which fields to track and how to encode them. Import them from `@colyseus/schema`.
+
+```typescript
+import { Schema, type, filter, filterChildren, deprecated } from "@colyseus/schema";
+```
+
+---
+
+## `@type(type)`
+
+Marks a property for synchronization. This is the primary decorator — every field you want sent to clients must use `@type`.
+
+```typescript
+class Player extends Schema {
+  @type("string") name = "";
+  @type("uint32") score = 0;
+  @type("boolean") isReady = false;
+  @type(Vector2) position = new Vector2(); // nested Schema
+}
+```
+
+<ParamField path="type" type="string | typeof Schema | SchemaCollectionDescriptor" required>
+  One of:
+  - A primitive type string: `"string"`, `"number"`, `"boolean"`, `"int8"`, `"uint8"`, `"int16"`, `"uint16"`, `"int32"`, `"uint32"`, `"int64"`, `"uint64"`, `"float32"`, `"float64"`
+  - A `Schema` subclass constructor for nested schemas
+  - A collection descriptor object: `{ map: Player }`, `{ array: "number" }`, `{ set: "string" }`
+</ParamField>
+
+### Collection descriptors
+
+```typescript
+class GameState extends Schema {
+  // MapSchema
+  @type({ map: Player }) players = new MapSchema<Player>();
+
+  // ArraySchema of primitives
+  @type({ array: "float32" }) trajectory = new ArraySchema<number>();
+
+  // ArraySchema of schemas
+  @type({ array: Item }) inventory = new ArraySchema<Item>();
+
+  // SetSchema
+  @type({ set: "string" }) tags = new SetSchema<string>();
+}
+```
+
+---
+
+## `@filter(callback)`
+
+Filters the field value per client. The callback runs before each patch and can return `false` to omit the field from that client's patch entirely.
+
+```typescript
+class Player extends Schema {
+  @type("string") name = "";
+
+  @filter(function(this: Player, client: Client, value: string, root: GameState) {
+    // only send the private token to the owning client
+    return this.sessionId === client.sessionId;
+  })
+  @type("string") privateToken = "";
+}
+```
+
+<ParamField path="callback" type="(this: Schema, client: Client, value: any, root: Schema) => boolean" required>
+  Called for each client before encoding. Return `false` to exclude the field.
+  - `this` — the Schema instance that owns the field
+  - `client` — the client about to receive the patch
+  - `value` — the current field value
+  - `root` — the top-level root Schema
+</ParamField>
+
+<Warning>
+`@filter` has a performance cost because it runs once per field per client per patch cycle. Use it sparingly.
+</Warning>
+
+---
+
+## `@filterChildren(callback)`
+
+Filters individual entries in a collection field. The callback is called for each element in the collection and can return `false` to exclude that element from the patch for a specific client.
+
+```typescript
+class GameState extends Schema {
+  @filterChildren(function(
+    this: GameState,
+    client: Client,
+    key: string,
+    value: Player,
+    root: GameState
+  ) {
+    // each client only sees players within their area
+    return isInRange(client, value.position);
+  })
+  @type({ map: Player }) players = new MapSchema<Player>();
+}
+```
+
+<ParamField path="callback" type="(this: Schema, client: Client, key: string | number, value: any, root: Schema) => boolean" required>
+  Called for each collection entry per client before encoding.
+  - `this` — the Schema instance that owns the collection
+  - `client` — the client receiving the patch
+  - `key` — the map key or array index
+  - `value` — the collection entry value
+  - `root` — the top-level root Schema
+</ParamField>
+
+---
+
+## `@deprecated()`
+
+Marks a field as deprecated for backward compatibility. The field continues to be decoded by older clients but is no longer sent in new patches.
+
+```typescript
+class Player extends Schema {
+  @deprecated()
+  @type("number") oldScore = 0; // no longer sent, but old clients can still decode it
+
+  @type("uint32") score = 0; // new field
+}
+```
+
+<Note>
+Use `@deprecated()` when you rename or remove a field and need to maintain wire compatibility with clients that have not yet been updated.
+</Note>
+
+---
+
+## Stage 3 decorators and `Symbol.metadata`
+
+Modern TypeScript (5.0+) with Stage 3 decorators uses `Symbol.metadata` for decorator metadata. `@colyseus/schema` supports both.
+
+```typescript
+// Modern TypeScript — no experimentalDecorators needed
+class Player extends Schema {
+  @type("string") name = "";
+}
+```
+
+If you see errors about `Symbol.metadata` not being defined, add a polyfill at the top of your entry file:
+
+```typescript
+// entry.ts (top of file)
+Symbol.metadata ??= Symbol.for("Symbol.metadata");
+```
+
+Or use Node.js 22+ which includes `Symbol.metadata` natively.
+
+---
+
+## Schema versioning and class-level metadata
+
+Each `Schema` subclass is assigned a unique type ID at definition time. This ID is encoded in the handshake sent to clients when they join a room. The client SDK uses it to match server types to client-side schema definitions.
+
+This means:
+- **Schema field order matters** for backward compatibility. Do not reorder fields between deployments.
+- Use `@deprecated()` to remove fields safely.
+- Adding new fields at the end of a class is always backward compatible.

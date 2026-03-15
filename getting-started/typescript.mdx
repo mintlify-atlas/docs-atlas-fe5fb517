@@ -1,0 +1,226 @@
+---
+title: "TypeScript Setup"
+description: "Full TypeScript configuration for a Colyseus project, including typed rooms, typed messages, and utility types."
+---
+
+Colyseus is written in TypeScript and ships type definitions for every public API. This page covers the recommended configuration and patterns for getting the most out of the type system.
+
+## tsconfig.json
+
+The following settings are used by the Colyseus monorepo itself and are a solid starting point for any Colyseus project:
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+
+    "lib": ["ESNext"],
+    "declaration": true,
+    "forceConsistentCasingInFileNames": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+
+    "strict": true,
+    "strictNullChecks": true,
+    "noImplicitAny": false,
+
+    "sourceMap": true,
+    "useDefineForClassFields": false,
+
+    "skipLibCheck": true
+  }
+}
+```
+
+<Warning>
+  Set `"useDefineForClassFields": false`. Colyseus room classes use class field
+  initializers (e.g. `state = new MyRoomState()`) that must be handled by the
+  TypeScript compiler rather than the native JavaScript runtime.
+</Warning>
+
+## Typed Rooms
+
+`Room` accepts a single generic parameter that shapes the types of `state`, `metadata`, and the client object:
+
+```typescript
+class Room<T extends RoomOptions = RoomOptions>
+```
+
+Where `RoomOptions` is:
+
+```typescript
+interface RoomOptions {
+  state?: object;
+  metadata?: any;
+  client?: Client;
+}
+```
+
+### Basic typed room
+
+```typescript
+import { Room, type Client } from "@colyseus/core";
+import { schema, type SchemaType, MapSchema } from "@colyseus/schema";
+
+const Player = schema({ x: "number", y: "number" });
+type Player = SchemaType<typeof Player>;
+
+const GameState = schema({ players: { map: Player } });
+type GameState = SchemaType<typeof GameState>;
+
+class GameRoom extends Room<{
+  state: GameState;
+  metadata: { difficulty: string; rating: number };
+}> {
+  state = new GameState();
+
+  async onCreate(options: any) {
+    // `this.state` is typed as GameState
+    this.state.players.set("seed", new Player());
+
+    // `this.metadata` is typed as { difficulty: string; rating: number }
+    this.metadata = { difficulty: "hard", rating: 1500 };
+  }
+}
+```
+
+### Typed client
+
+You can extend `Client` with custom `userData`, `auth`, and a typed message map:
+
+```typescript
+import { Room, type Client } from "@colyseus/core";
+
+type MyClient = Client<{
+  userData: { playerId: string };
+  auth: { userId: number; username: string };
+  messages: {
+    // message name → payload type received by the client
+    position_update: { x: number; y: number };
+    game_over: { winner: string };
+  };
+}>;
+
+class GameRoom extends Room<{ client: MyClient }> {
+  onJoin(client: MyClient, options: any) {
+    // `client.userData` is typed as { playerId: string }
+    // `client.auth` is typed as { userId: number; username: string }
+    client.send("position_update", { x: 0, y: 0 });
+    //           ^^^^^^^^^^^^^^^^  payload is checked against the messages map
+  }
+}
+```
+
+## Typed message handlers
+
+### Using `onMessage` directly
+
+```typescript
+onCreate(options: any) {
+  this.onMessage("move", (client: MyClient, message: { x: number; y: number }) => {
+    // message is typed as { x: number; y: number }
+  });
+}
+```
+
+### Using the `messages` property with `validate`
+
+The `messages` class property and the `validate` helper provide co-located, type-safe handlers with runtime validation via a [Standard Schema](https://standardschema.dev/) compatible library such as Zod:
+
+```typescript
+import { Room, validate, type Messages } from "@colyseus/core";
+import { z } from "zod";
+
+const MoveSchema = z.object({ x: z.number(), y: z.number() });
+
+class GameRoom extends Room<{ state: GameState; client: MyClient }> {
+  state = new GameState();
+
+  // All handlers are declared as a typed map
+  messages: Messages<GameRoom> = {
+    // With schema validation — message type is inferred from MoveSchema
+    move: validate(MoveSchema, (client, message) => {
+      // message.x and message.y are `number` — no manual casting needed
+      const player = this.state.players.get(client.sessionId)!;
+      player.x = message.x;
+      player.y = message.y;
+    }),
+
+    // Without validation — plain function
+    ping: (client, _message) => {
+      client.send("pong", {});
+    },
+
+    // Fallback handler for unregistered message types
+    _: (client, type, message) => {
+      console.warn("unhandled message", type, message);
+    },
+  };
+}
+```
+
+<Note>
+  `validate()` accepts any Standard Schema v1 compatible schema — Zod, Valibot,
+  ArkType, etc. If validation fails, the client receives an error and the handler
+  is not called.
+</Note>
+
+## Utility types
+
+Three utility types let you extract the individual pieces of a room's generic parameter. They are useful when writing helpers or tests that operate on room instances:
+
+| Type | Extracts |
+|------|----------|
+| `ExtractRoomState<T>` | The `state` type from a `RoomOptions` generic |
+| `ExtractRoomMetadata<T>` | The `metadata` type from a `RoomOptions` generic |
+| `ExtractRoomClient<T>` | The `client` type from a `RoomOptions` generic |
+
+```typescript
+import {
+  type ExtractRoomState,
+  type ExtractRoomMetadata,
+  type ExtractRoomClient,
+} from "@colyseus/core";
+
+type RoomDef = { state: GameState; metadata: { difficulty: string }; client: MyClient };
+
+type S = ExtractRoomState<RoomDef>;    // GameState
+type M = ExtractRoomMetadata<RoomDef>; // { difficulty: string }
+type C = ExtractRoomClient<RoomDef>;   // MyClient
+```
+
+These types are also used internally by the `Room` class itself — `this.state`, `this.metadata`, and the `client` argument in lifecycle methods are all derived from them.
+
+## Full-stack type safety with `SDKTypes`
+
+When you use `defineServer` (or the `config()` helper from `@colyseus/tools`), the server object carries full type information about all registered rooms and routes. You can pass that type to the client SDK to get end-to-end safety:
+
+```typescript server/src/app.config.ts
+import config from "@colyseus/tools";
+import { defineRoom } from "@colyseus/core";
+import { GameRoom } from "./GameRoom.js";
+
+export const server = config({
+  rooms: {
+    game: defineRoom(GameRoom),
+  },
+});
+```
+
+```typescript client/src/index.ts
+import { ColyseusSDK } from "@colyseus/sdk";
+import type { server } from "../../server/src/app.config.js";
+
+// Pass the server type as a generic — the SDK now knows about all rooms and routes
+const sdk = new ColyseusSDK<typeof server>("ws://localhost:2567");
+
+async function main() {
+  const room = await sdk.joinOrCreate("game");
+
+  // TypeScript will error if you send an unregistered message type
+  room.send("move", { x: 100, y: 200 });
+}
+```

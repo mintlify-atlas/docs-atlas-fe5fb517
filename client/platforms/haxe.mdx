@@ -1,0 +1,159 @@
+---
+title: "Haxe"
+description: "Use the Colyseus Haxe library. Install with haxelib, connect to a room, and exchange messages from any Haxe target."
+---
+
+## Installation
+
+```bash
+haxelib install colyseus
+```
+
+Then add the library to your project's `build.hxml`:
+
+```hxml
+-lib colyseus
+```
+
+For OpenFL or Lime projects, add to your `project.xml`:
+
+```xml
+<haxelib name="colyseus" />
+```
+
+---
+
+## Basic connection
+
+```haxe
+import io.colyseus.Client;
+import io.colyseus.Room;
+
+class Main {
+    static function main() {
+        var client = new Client("ws://localhost:2567");
+
+        client.joinOrCreate("game", [], GameState, function(err, room) {
+            if (err != null) {
+                trace("Error: " + err);
+                return;
+            }
+
+            trace("Joined room: " + room.roomId);
+
+            room.onStateChange += function(state:GameState) {
+                trace("State changed: " + state);
+            };
+
+            room.onError += function(code:Int, message:String) {
+                trace("Error [" + code + "]: " + message);
+            };
+
+            room.onLeave += function(code:Int) {
+                trace("Left with code: " + code);
+            };
+        });
+    }
+}
+```
+
+---
+
+## Joining a room
+
+```haxe
+// Join or create
+client.joinOrCreate("game", [], GameState, function(err, room) { ... });
+
+// Always create
+client.create("game", ["mode" => "private"], GameState, function(err, room) { ... });
+
+// Join existing
+client.join("game", [], GameState, function(err, room) { ... });
+
+// Join by room ID
+client.joinById("AbCd1234", [], GameState, function(err, room) { ... });
+```
+
+---
+
+## Sending messages
+
+```haxe
+// Send with a map payload
+room.send("move", ["x" => 10, "y" => 5]);
+
+// Send without payload
+room.send("ready");
+```
+
+---
+
+## Receiving messages
+
+```haxe
+// Listen for a specific message type
+room.onMessage("chat", function(message:Dynamic) {
+    trace("Chat: " + message.text);
+});
+
+// Catch-all
+room.onMessage("*", function(type:String, message:Dynamic) {
+    trace("Message type: " + type);
+});
+```
+
+---
+
+## State schema (Haxe)
+
+Define your state classes by extending `Schema`:
+
+```haxe
+import io.colyseus.serializer.schema.Schema;
+import io.colyseus.serializer.schema.types.MapSchema;
+
+class Player extends Schema {
+    @:type("float32") public var x:Float = 0;
+    @:type("float32") public var y:Float = 0;
+    @:type("string")  public var name:String = "";
+}
+
+class GameState extends Schema {
+    @:type(["map", Player]) public var players:MapSchema<Player>;
+    @:type("int32") public var tick:Int = 0;
+}
+```
+
+Listen to collection changes:
+
+```haxe
+room.state.players.onAdd = function(player:Player, sessionId:String) {
+    trace("Player joined: " + sessionId);
+    player.onChange = function(changes:Array<DataChange>) {
+        trace("Player moved");
+    };
+};
+
+room.state.players.onRemove = function(player:Player, sessionId:String) {
+    trace("Player left: " + sessionId);
+};
+```
+
+---
+
+## Leaving a room
+
+```haxe
+room.leave();
+```
+
+---
+
+## Platform considerations
+
+- The Haxe library is compatible with Haxe 4.x.
+- Supported targets include JavaScript (HTML5), HashLink, C++, and others with WebSocket support.
+- For JavaScript targets, the SDK delegates to the browser's native WebSocket.
+- Schema classes must be generated or written to match your server-side definitions exactly. Use the Colyseus schema code generator targeting Haxe output.
+- The `client.update()` method must be called every frame on native targets (HashLink, C++) to process incoming messages. It is not required for the JS target.

@@ -1,0 +1,350 @@
+---
+title: "Room (Client)"
+description: "The Room object returned after joining a Colyseus room. Provides access to synchronized state, message callbacks, and lifecycle events."
+---
+
+When a matchmaking method resolves, it returns a `Room` instance representing your live connection to the server-side room.
+
+```typescript
+const room = await client.joinOrCreate("game");
+```
+
+---
+
+## Properties
+
+<ParamField path="room.id" type="string">
+  The unique room instance ID (e.g. `"AbCd1234"`). Stable across reconnections.
+</ParamField>
+
+<ParamField path="room.name" type="string">
+  The room type name as registered on the server (e.g. `"game"`).
+</ParamField>
+
+<ParamField path="room.sessionId" type="string">
+  The unique session ID assigned to this client within the room.
+</ParamField>
+
+<ParamField path="room.reconnectionToken" type="string">
+  An opaque string of the form `roomId:token` used to reconnect after an unexpected disconnection. Persist this value (e.g. in `localStorage`) to enable cross-session reconnection.
+</ParamField>
+
+<ParamField path="room.state" type="State">
+  The current synchronized game state. Updated automatically as patches arrive from the server. Only available after the first `onStateChange` fires.
+</ParamField>
+
+<ParamField path="room.connection" type="Connection">
+  The underlying transport connection.
+</ParamField>
+
+<ParamField path="room.serializer" type="Serializer">
+  The active serializer instance. For `@colyseus/schema` state this is a `SchemaSerializer`.
+</ParamField>
+
+<ParamField path="room.reconnection" type="ReconnectionOptions">
+  Configuration for automatic reconnection behavior. See [Reconnection](#reconnection) below.
+</ParamField>
+
+---
+
+## Event callbacks
+
+### `room.onStateChange`
+
+Called when the full state or a state patch is received from the server. Both the initial full-state message and every subsequent patch trigger this callback with the complete, up-to-date state object.
+
+```typescript
+room.onStateChange((state) => {
+  console.log("state updated:", state);
+});
+```
+
+Call `.once()` to receive the state only on the first update:
+
+```typescript
+room.onStateChange.once((state) => {
+  console.log("initial state:", state);
+});
+```
+
+---
+
+### `room.onMessage`
+
+Register a handler for a specific message type sent from the server.
+
+```typescript
+// String message type
+room.onMessage("chat", (message) => {
+  console.log("chat:", message);
+});
+
+// Numeric message type
+room.onMessage(1, (payload) => {
+  console.log("message type 1:", payload);
+});
+```
+
+Use `"*"` to catch all message types:
+
+```typescript
+room.onMessage("*", (type, payload) => {
+  console.log("received message type", type, payload);
+});
+```
+
+`onMessage` returns an unbind function:
+
+```typescript
+const unbind = room.onMessage("chat", handler);
+// later:
+unbind();
+```
+
+<ParamField path="type" type="string | number | *" required>
+  Message type to listen for. Pass `"*"` to receive all messages.
+</ParamField>
+
+<ParamField path="callback" type="(payload) => void" required>
+  Called with the deserialized message payload. When `type` is `"*"`, the callback receives `(type, payload)`.
+</ParamField>
+
+---
+
+### `room.onError`
+
+Called when the server sends an error or the connection is closed with an error code.
+
+```typescript
+room.onError((code, message) => {
+  console.error("room error:", code, message);
+});
+```
+
+<ParamField path="code" type="number">
+  Numeric error or close code.
+</ParamField>
+
+<ParamField path="message" type="string">
+  Human-readable description of the error.
+</ParamField>
+
+---
+
+### `room.onLeave`
+
+Called when the client leaves the room — either by calling `room.leave()`, by the server kicking the client, or after automatic reconnection has exhausted all attempts.
+
+```typescript
+room.onLeave((code) => {
+  console.log("left room with code:", code);
+});
+```
+
+<Note>
+  `onLeave` automatically calls `removeAllListeners()` and tears down the serializer. You do not need to clean up manually in most cases.
+</Note>
+
+---
+
+### `room.onReconnect`
+
+Called after automatic reconnection succeeds.
+
+```typescript
+room.onReconnect(() => {
+  console.log("reconnected successfully");
+});
+```
+
+---
+
+### `room.onDrop`
+
+Called when the connection drops unexpectedly, before automatic reconnection begins.
+
+```typescript
+room.onDrop((code, reason) => {
+  console.warn("connection dropped:", code, reason);
+});
+```
+
+---
+
+## Methods
+
+### `room.send(type, payload?)`
+
+Send a message to the server.
+
+```typescript
+// With payload
+room.send("move", { x: 10, y: 5 });
+
+// Without payload
+room.send("ping");
+
+// Numeric type
+room.send(1, { data: true });
+```
+
+Messages sent while the connection is not yet open are buffered and replayed once the connection is established (up to `room.reconnection.maxEnqueuedMessages`, default 10).
+
+<ParamField path="type" type="string | number" required>
+  Message type identifier. Must match a handler registered on the server with `this.onMessage(type, ...)`.
+</ParamField>
+
+<ParamField path="payload" type="any">
+  Optional payload. Serialized with msgpack.
+</ParamField>
+
+---
+
+### `room.sendUnreliable(type, payload?)`
+
+Send an unreliable message over WebTransport (HTTP/3). Falls back silently when the connection is not open. Useful for high-frequency data like player positions where dropped packets are acceptable.
+
+```typescript
+room.sendUnreliable("position", { x: player.x, y: player.y });
+```
+
+---
+
+### `room.sendBytes(type, bytes)`
+
+Send raw bytes to the server.
+
+```typescript
+const bytes = new Uint8Array([1, 2, 3]);
+room.sendBytes("rawData", bytes);
+```
+
+---
+
+### `room.leave(consented?)`
+
+Leave the room. Returns a `Promise<number>` that resolves with the close code once the connection is fully closed.
+
+```typescript
+await room.leave();
+```
+
+Pass `false` to disconnect without sending a leave signal (hard close):
+
+```typescript
+room.leave(false);
+```
+
+<ParamField path="consented" type="boolean" default="true">
+  When `true` (default) sends a protocol-level leave message before closing, allowing the server to run `onLeave` cleanup. When `false` closes the socket immediately.
+</ParamField>
+
+---
+
+### `room.ping(callback)`
+
+Send a ping to measure round-trip latency within the room.
+
+```typescript
+room.ping((ms) => {
+  console.log(`ping: ${ms}ms`);
+});
+```
+
+---
+
+### `room.removeAllListeners()`
+
+Remove all registered event listeners (`onStateChange`, `onMessage`, `onError`, `onLeave`, `onReconnect`, `onDrop`) and clear schema decoder callbacks.
+
+```typescript
+room.removeAllListeners();
+```
+
+<Note>
+  `removeAllListeners()` is called automatically when `onLeave` fires.
+</Note>
+
+---
+
+## State synchronization
+
+The server sends an initial full state on join (`ROOM_STATE`), then binary delta patches (`ROOM_STATE_PATCH`) as the state changes. The SDK applies patches automatically using `@colyseus/schema`.
+
+Your `onStateChange` callback fires for both the full state and every patch, always receiving the complete, updated state:
+
+```typescript
+room.onStateChange((state) => {
+  // `state` is always the full, up-to-date state object
+  renderScene(state);
+});
+```
+
+For Schema-based states you can also listen to individual property changes using the schema callbacks API:
+
+```typescript
+import { getStateCallbacks } from "@colyseus/sdk";
+
+const $ = getStateCallbacks(room);
+
+$.players.onAdd((player, sessionId) => {
+  console.log("player joined:", sessionId);
+
+  $(player).position.onChange(() => {
+    updatePlayerPosition(sessionId, player.position);
+  });
+});
+
+$.players.onRemove((player, sessionId) => {
+  console.log("player left:", sessionId);
+});
+```
+
+---
+
+## Reconnection
+
+### Automatic reconnection
+
+The SDK automatically attempts to reconnect when an unexpected disconnection is detected (network drop, `ABNORMAL_CLOSURE`, `GOING_AWAY`, or `MAY_TRY_RECONNECT` close codes). Reconnection uses exponential backoff.
+
+Default settings (configurable via `room.reconnection`):
+
+| Property | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Set to `false` to disable automatic reconnection entirely. |
+| `maxRetries` | `15` | Maximum number of reconnection attempts. |
+| `minDelay` | `100` ms | Minimum delay between retries. |
+| `maxDelay` | `5000` ms | Maximum delay between retries. |
+| `minUptime` | `5000` ms | Minimum time the room must have been connected before reconnection is attempted. |
+| `maxEnqueuedMessages` | `10` | Messages queued while reconnecting. |
+
+Disable automatic reconnection:
+
+```typescript
+room.reconnection.enabled = false;
+```
+
+### Manual reconnection
+
+To reconnect manually (or from a different session), save `room.reconnectionToken` and pass it to `client.reconnect()`:
+
+```typescript
+// Save on first connect
+localStorage.setItem("token", room.reconnectionToken);
+
+// On next session
+const savedToken = localStorage.getItem("token");
+if (savedToken) {
+  try {
+    const room = await client.reconnect(savedToken);
+  } catch (e) {
+    // token expired or room no longer exists
+    localStorage.removeItem("token");
+  }
+}
+```
+
+<Warning>
+  Reconnection tokens expire when the server-side `allowReconnection()` window closes. Attempting to reconnect after expiry will throw a `MatchMakeError`.
+</Warning>

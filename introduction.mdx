@@ -1,0 +1,134 @@
+---
+title: "Colyseus — Multiplayer Framework for Node.js"
+description: "Build authoritative multiplayer games with real-time state synchronization, built-in matchmaking, and seamless scaling."
+---
+
+<img
+  src="https://media.brand.dev/f3239a9d-7a12-4a94-8082-531c7bb3edea.png"
+  alt="Colyseus"
+  style={{ maxWidth: "300px", marginBottom: "2rem" }}
+/>
+
+# Welcome to Colyseus
+
+Colyseus is an **authoritative multiplayer game framework for Node.js**. It gives you real-time state synchronization, room-based matchmaking, and client SDKs for every major platform — all out of the box.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/getting-started/quickstart">
+    Get a multiplayer game server running in under 5 minutes.
+  </Card>
+  <Card title="Server API" icon="server" href="/server/overview">
+    Learn about Rooms, Matchmaking, Authentication and more.
+  </Card>
+  <Card title="Client SDK" icon="code" href="/client/overview">
+    Connect from TypeScript, Unity, Godot, and 8+ other platforms.
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/server">
+    Full reference for every class, method, and option.
+  </Card>
+</CardGroup>
+
+## Why Colyseus?
+
+<CardGroup cols={2}>
+  <Card title="Real-time state sync" icon="bolt">
+    Define your state on the server; it auto-synchronizes to all clients — delta-compressed and binary-encoded at up to 20fps.
+  </Card>
+  <Card title="Built-in matchmaking" icon="swords">
+    Room-based architecture with filtering, queuing, locking, and reconnection support out of the box.
+  </Card>
+  <Card title="Cheat-proof by design" icon="shield">
+    Authoritative server model ensures all game logic runs server-side, not on the client.
+  </Card>
+  <Card title="Horizontal scaling" icon="chart-line">
+    Go from 10 to 10,000+ CCU by scaling vertically or horizontally with Redis and load balancers.
+  </Card>
+  <Card title="Multi-platform SDKs" icon="globe">
+    Official SDKs for TypeScript, Unity, Godot, GameMaker, Defold, Construct3, Haxe, and C/native.
+  </Card>
+  <Card title="MIT licensed" icon="heart">
+    Free forever — even for commercial games. No royalties, no lock-in.
+  </Card>
+</CardGroup>
+
+## How it works
+
+Colyseus follows an **authoritative server** model. The server holds the source of truth for all game state. Clients connect to *Rooms*, send messages, and receive state patches automatically.
+
+```
+Client → join/create Room → Server runs game logic → State patches broadcast → All clients in sync
+```
+
+1. **Define a Room** — extend the `Room` class, set your state, handle player messages.
+2. **Start a Server** — call `defineServer()` and register your rooms.
+3. **Connect from the client** — use the Colyseus SDK to join or create a room.
+
+## Quick example
+
+```typescript server/rooms/GameRoom.ts
+import { Room, Client } from "@colyseus/core";
+import { Schema, type } from "@colyseus/schema";
+
+class GameState extends Schema {
+  @type("number") score: number = 0;
+}
+
+export class GameRoom extends Room<{ state: GameState }> {
+  state = new GameState();
+
+  onCreate() {
+    this.onMessage("increment", (client, message) => {
+      this.state.score++;
+    });
+  }
+
+  onJoin(client: Client) {
+    console.log(`${client.sessionId} joined!`);
+  }
+
+  onLeave(client: Client) {
+    console.log(`${client.sessionId} left.`);
+  }
+}
+```
+
+```typescript server/index.ts
+import { defineServer, defineRoom } from "@colyseus/core";
+import { GameRoom } from "./rooms/GameRoom";
+
+const server = defineServer({
+  rooms: {
+    game: defineRoom(GameRoom),
+  },
+});
+
+server.listen(2567).then(() => {
+  console.log("Colyseus server is running on ws://localhost:2567");
+});
+```
+
+## Client SDKs
+
+| Platform | Install |
+|----------|---------|
+| TypeScript / JavaScript | `npm install @colyseus/sdk` |
+| Unity | [Download .unitypackage](https://github.com/colyseus/colyseus-unity3d/releases/latest) |
+| Godot | [Download GDExtension](https://github.com/colyseus/native-sdk/releases) |
+| GameMaker | [Download extension](https://github.com/colyseus/native-sdk/releases) |
+| Defold | See [Defold guide](/client/platforms/defold) |
+| Construct3 | [Download addon](https://www.construct.net/en/make-games/addons/111/colyseus-multiplayer-sdk) |
+| Haxe | `haxelib install colyseus` |
+
+## Community & support
+
+<CardGroup cols={3}>
+  <Card title="Discord" icon="discord" href="https://discord.gg/colyseus">
+    Join thousands of developers building with Colyseus.
+  </Card>
+  <Card title="GitHub Discussions" icon="github" href="https://github.com/colyseus/colyseus/discussions">
+    Ask questions and share your projects.
+  </Card>
+  <Card title="GitHub Issues" icon="circle-exclamation" href="https://github.com/colyseus/colyseus/issues">
+    Report bugs or request features.
+  </Card>
+</CardGroup>

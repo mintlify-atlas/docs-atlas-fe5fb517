@@ -1,0 +1,147 @@
+---
+title: "Defold"
+description: "Use the Colyseus Lua extension in Defold. Add the dependency, connect to a room, and handle state and messages."
+---
+
+## Installation
+
+<Steps>
+  <Step title="Add the dependency">
+    Open your `game.project` file and add the Colyseus Defold extension URL to the **Dependencies** field under the **Project** section:
+
+    ```
+    https://github.com/colyseus/colyseus-defold/archive/refs/heads/master.zip
+    ```
+
+    Then click **Project → Fetch Libraries** to download the extension.
+  </Step>
+  <Step title="Require the module">
+    In any Lua script, require the Colyseus module:
+
+    ```lua
+    local colyseus = require "colyseus.client"
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Connecting to a server (Lua)
+
+```lua
+local colyseus = require "colyseus.client"
+
+local client
+local room
+
+function init(self)
+    client = colyseus.new("ws://localhost:2567")
+end
+```
+
+---
+
+## Joining a room
+
+```lua
+function init(self)
+    client = colyseus.new("ws://localhost:2567")
+
+    client:join_or_create("game", {}, function(err, joined_room)
+        if err then
+            print("Failed to join:", err)
+            return
+        end
+
+        room = joined_room
+        print("Joined room:", room.id)
+
+        room:on("statechange", function(state)
+            print("State changed")
+        end)
+
+        room:on("error", function(code, message)
+            print("Error:", code, message)
+        end)
+
+        room:on("leave", function(code)
+            print("Left room:", code)
+        end)
+    end)
+end
+```
+
+---
+
+## Receiving messages
+
+```lua
+room:on_message("chat", function(message)
+    print("Chat message:", message.text)
+end)
+
+-- Catch-all handler
+room:on_message("*", function(message_type, payload)
+    print("Message type:", message_type)
+end)
+```
+
+---
+
+## Sending messages
+
+```lua
+-- Send a message with a table payload
+room:send("move", { x = go.get_position().x, y = go.get_position().y })
+
+-- Send without payload
+room:send("ready")
+```
+
+---
+
+## Reading state
+
+```lua
+room:on("statechange", function(state)
+    -- Access state fields directly
+    for session_id, player in pairs(state.players) do
+        print(session_id, player.x, player.y)
+    end
+end)
+```
+
+---
+
+## Update loop
+
+The Colyseus Defold extension requires you to call `client:update()` every frame to process incoming messages:
+
+```lua
+function update(self, dt)
+    if client then
+        client:update()
+    end
+end
+```
+
+---
+
+## Leaving a room
+
+```lua
+function final(self)
+    if room then
+        room:leave()
+    end
+end
+```
+
+---
+
+## Platform considerations
+
+- Call `client:update()` every frame in your `update()` function; the SDK does not automatically poll the network.
+- Defold uses Lua tables as the state type; schema classes are not used.
+- The extension has been tested on HTML5, iOS, Android, macOS, Windows, and Linux targets.
+- For HTTPS/WSS servers, ensure your Defold project has the appropriate SSL certificates configured.

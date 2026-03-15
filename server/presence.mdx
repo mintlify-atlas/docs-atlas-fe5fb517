@@ -1,0 +1,331 @@
+---
+title: Presence
+description: Use the Presence API for cross-room communication, global counters, and distributed pub/sub in Colyseus.
+---
+
+The `Presence` interface is Colyseus's abstraction over a shared key-value store and pub/sub bus. Inside a `Room`, it is available as `this.presence`.
+
+- In single-process deployments, `LocalPresence` stores everything in memory.
+- In multi-process deployments, `RedisPresence` stores data in Redis and routes pub/sub messages across processes.
+
+Your room code is the same either way.
+
+## Accessing presence in a room
+
+```typescript
+import { Room } from "colyseus";
+
+export class GameRoom extends Room {
+  onCreate(options: any) {
+    // Publish a message to all subscribers of "player-joined"
+    this.presence.publish("player-joined", { roomId: this.roomId });
+
+    // Subscribe to messages from other rooms
+    this.presence.subscribe("global-event", (data) => {
+      console.log("Received global event:", data);
+    });
+  }
+}
+```
+
+## Implementations
+
+| Implementation | Package | When to use |
+|----------------|---------|-------------|
+| `LocalPresence` | `colyseus` (built-in) | Single process, development |
+| `RedisPresence` | `@colyseus/redis-presence` | Multi-process, production |
+
+Set the implementation via the `Server` constructor:
+
+```typescript
+import { Server } from "colyseus";
+import { RedisPresence } from "@colyseus/redis-presence";
+
+const gameServer = new Server({
+  presence: new RedisPresence(),
+});
+```
+
+## API reference
+
+### Pub/Sub
+
+#### `subscribe(topic, callback)`
+
+Subscribes to messages published on `topic`. The `callback` is called with the message payload whenever a message arrives.
+
+```typescript
+await this.presence.subscribe("chat:global", (message) => {
+  this.broadcast("chat", message);
+});
+```
+
+#### `unsubscribe(topic, callback?)`
+
+Removes the subscription. If `callback` is omitted, all listeners for `topic` are removed.
+
+```typescript
+await this.presence.unsubscribe("chat:global", myCallback);
+```
+
+#### `publish(topic, data)`
+
+Publishes `data` to all subscribers of `topic`. Works across processes when using `RedisPresence`.
+
+```typescript
+this.presence.publish("room-ended", { roomId: this.roomId, winner: "playerA" });
+```
+
+#### `channels(pattern?)`
+
+Returns a list of currently active channel names. Accepts an optional glob pattern.
+
+```typescript
+const channels = await this.presence.channels("chat:*");
+```
+
+---
+
+### Key/Value store
+
+#### `set(key, value)`
+
+Sets `key` to `value`.
+
+```typescript
+this.presence.set("server:status", "running");
+```
+
+#### `get(key)`
+
+Returns the value stored at `key`, or `null` if the key does not exist.
+
+```typescript
+const status = await this.presence.get("server:status");
+```
+
+#### `del(key)`
+
+Deletes `key`.
+
+```typescript
+this.presence.del("server:status");
+```
+
+#### `exists(key)`
+
+Returns `true` if `key` exists.
+
+```typescript
+if (await this.presence.exists("maintenance")) {
+  // ...
+}
+```
+
+#### `setex(key, value, seconds)`
+
+Sets `key` to `value` with an automatic expiry after `seconds`.
+
+```typescript
+this.presence.setex("rate-limit:" + playerId, "1", 60);
+```
+
+#### `expire(key, seconds)`
+
+Sets a TTL on an existing key.
+
+```typescript
+this.presence.expire("session:" + token, 3600);
+```
+
+#### `incr(key)`
+
+Increments the integer stored at `key` by 1. Creates the key with value `0` first if it does not exist. Returns the new value.
+
+```typescript
+const total = await this.presence.incr("global:connections");
+```
+
+#### `decr(key)`
+
+Decrements the integer stored at `key` by 1.
+
+```typescript
+await this.presence.decr("global:connections");
+```
+
+---
+
+### Hash (object) store
+
+#### `hset(key, field, value)`
+
+Sets `field` inside the hash at `key` to `value`.
+
+```typescript
+await this.presence.hset("player:scores", playerId, String(score));
+```
+
+#### `hget(key, field)`
+
+Returns the value of `field` in the hash at `key`.
+
+```typescript
+const score = await this.presence.hget("player:scores", playerId);
+```
+
+#### `hgetall(key)`
+
+Returns all field-value pairs in the hash at `key`.
+
+```typescript
+const scores = await this.presence.hgetall("player:scores");
+// { "player1": "100", "player2": "200" }
+```
+
+#### `hdel(key, field)`
+
+Removes `field` from the hash at `key`.
+
+```typescript
+await this.presence.hdel("player:scores", playerId);
+```
+
+#### `hlen(key)`
+
+Returns the number of fields in the hash.
+
+```typescript
+const count = await this.presence.hlen("player:scores");
+```
+
+#### `hincrby(key, field, value)`
+
+Increments the integer stored at `field` in the hash by `value`.
+
+```typescript
+await this.presence.hincrby("room:stats", "messageCount", 1);
+```
+
+---
+
+### Set store
+
+#### `sadd(key, value)`
+
+Adds `value` to the set at `key`. Duplicate values are ignored.
+
+```typescript
+this.presence.sadd("online:players", client.sessionId);
+```
+
+#### `srem(key, value)`
+
+Removes `value` from the set.
+
+```typescript
+this.presence.srem("online:players", client.sessionId);
+```
+
+#### `smembers(key)`
+
+Returns all members of the set.
+
+```typescript
+const online = await this.presence.smembers("online:players");
+```
+
+#### `sismember(key, field)`
+
+Returns `1` if `field` is a member of the set, `0` otherwise.
+
+```typescript
+const isOnline = await this.presence.sismember("online:players", sessionId);
+```
+
+#### `scard(key)`
+
+Returns the number of elements in the set.
+
+```typescript
+const count = await this.presence.scard("online:players");
+```
+
+#### `sinter(...keys)`
+
+Returns the intersection of all the given sets.
+
+```typescript
+const common = await this.presence.sinter("friends:player1", "friends:player2");
+```
+
+---
+
+### List store
+
+#### `rpush(key, value)` / `lpush(key, value)`
+
+Append to the end (`rpush`) or beginning (`lpush`) of a list.
+
+#### `rpop(key)` / `lpop(key)`
+
+Remove and return the last (`rpop`) or first (`lpop`) element.
+
+#### `llen(key)`
+
+Return the length of the list.
+
+#### `brpop(...keys, timeoutInSeconds)`
+
+Blocking pop: waits until an element is available in one of the listed keys, or returns `null` on timeout.
+
+```typescript
+const result = await this.presence.brpop("work-queue", 5);
+if (result) {
+  const [key, value] = result;
+}
+```
+
+---
+
+## Use cases
+
+**Global player counter**
+
+```typescript
+onJoin() {
+  this.presence.incr("global:connections");
+}
+onLeave() {
+  this.presence.decr("global:connections");
+}
+```
+
+**Cross-room notifications**
+
+```typescript
+// Room A publishes
+this.presence.publish("tournament:start", { tournamentId: 42 });
+
+// Room B subscribes
+this.presence.subscribe("tournament:start", (data) => {
+  this.broadcast("tournament-starting", data);
+});
+```
+
+**Rate limiting**
+
+```typescript
+async onMessage(client, message) {
+  const key = `rate:${client.sessionId}`;
+  const count = await this.presence.incr(key);
+  if (count === 1) {
+    this.presence.expire(key, 1); // reset every second
+  }
+  if (count > 10) {
+    client.error(429, "Too many messages");
+    return;
+  }
+  // handle message
+}
+```
