@@ -1,0 +1,183 @@
+{
+  "projectType": "framework",
+  "projectName": "Colyseus",
+  "projectDescription": "An authoritative multiplayer game framework for Node.js that provides real-time state synchronization, built-in matchmaking, and room-based architecture for building scalable multiplayer games.",
+  "theme": "palm",
+  "primaryColor": "#7e3de1",
+  "lightColor": "#c699e2",
+  "darkColor": "#7a40d7",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Getting Started",
+        "groups": [
+          {
+            "group": "Introduction",
+            "pages": [
+              "introduction",
+              "getting-started/quickstart",
+              "getting-started/typescript",
+              "getting-started/architecture"
+            ]
+          },
+          {
+            "group": "Installation",
+            "pages": [
+              "installation/server",
+              "installation/client-sdks"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Server",
+        "groups": [
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "server/overview",
+              "server/server",
+              "server/room",
+              "server/client",
+              "server/state-synchronization"
+            ]
+          },
+          {
+            "group": "Matchmaking",
+            "pages": [
+              "server/matchmaking/overview",
+              "server/matchmaking/room-filters",
+              "server/matchmaking/lobby-room",
+              "server/matchmaking/relay-room",
+              "server/matchmaking/queue-room"
+            ]
+          },
+          {
+            "group": "Authentication",
+            "pages": [
+              "server/auth/overview",
+              "server/auth/jwt",
+              "server/auth/oauth"
+            ]
+          },
+          {
+            "group": "Scaling",
+            "pages": [
+              "server/scaling/overview",
+              "server/scaling/redis-presence",
+              "server/scaling/redis-driver",
+              "server/scaling/load-balancing"
+            ]
+          },
+          {
+            "group": "Transports",
+            "pages": [
+              "server/transports/overview",
+              "server/transports/ws-transport",
+              "server/transports/uwebsockets-transport",
+              "server/transports/bun-websockets"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "server/presence",
+              "server/custom-http-routes",
+              "server/devmode",
+              "server/monitoring"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Client SDK",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "client/overview",
+              "client/installation"
+            ]
+          },
+          {
+            "group": "API Reference",
+            "pages": [
+              "client/client",
+              "client/room",
+              "client/auth"
+            ]
+          },
+          {
+            "group": "Platforms",
+            "pages": [
+              "client/platforms/typescript",
+              "client/platforms/unity",
+              "client/platforms/godot",
+              "client/platforms/gamemaker",
+              "client/platforms/defold",
+              "client/platforms/construct3",
+              "client/platforms/haxe"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Server API",
+            "pages": [
+              "api/server",
+              "api/room",
+              "api/client",
+              "api/matchmaker",
+              "api/presence"
+            ]
+          },
+          {
+            "group": "Schema",
+            "pages": [
+              "api/schema/overview",
+              "api/schema/decorators",
+              "api/schema/collections"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Real-time state synchronization with delta-compressed, binary-encoded patches",
+    "Built-in matchmaking with room-based architecture, filtering, and queuing",
+    "Authoritative server model for cheat-proof game logic",
+    "Horizontal scaling via Redis presence and drivers",
+    "Multiple transport options: WebSockets (ws, uWebSockets, Bun)",
+    "Authentication module with JWT, OAuth, email/password support",
+    "Built-in rooms: LobbyRoom, RelayRoom, QueueRoom",
+    "TypeScript-first API with full type inference",
+    "Client SDKs for TypeScript, Unity, Godot, GameMaker, Defold, Construct3, Haxe, and more",
+    "Dev mode with hot-reload and room state restoration"
+  ],
+  "publicApiSurface": [
+    "Server (defineServer, defineRoom)",
+    "Room (onCreate, onJoin, onLeave, onDispose, onAuth, onDrop, onReconnect, onBeforePatch)",
+    "Room.broadcast(type, message, options)",
+    "Room.onMessage(type, callback)",
+    "Room.allowReconnection(client, seconds)",
+    "Room.disconnect(closeCode)",
+    "Room.setMatchmaking(updates)",
+    "Room.lock() / Room.unlock()",
+    "Client (client.send, client.leave, client.error, client.auth)",
+    "matchMaker.joinOrCreate / matchMaker.create / matchMaker.join / matchMaker.joinById",
+    "matchMaker.query / matchMaker.findOneRoomAvailable",
+    "LocalPresence / RedisPresence",
+    "LocalDriver / RedisDriver / MongooseDriver / DrizzleDriver",
+    "LobbyRoom / RelayRoom / QueueRoom",
+    "auth (JWT, OAuth, Hash)",
+    "createEndpoint / createRouter / createMiddleware",
+    "@colyseus/schema (Schema, MapSchema, ArraySchema, SetSchema)",
+    "@colyseus/testing (ColyseusTestServer)",
+    "@colyseus/monitor (monitoring dashboard)",
+    "@colyseus/tools (colyseus.config.ts scaffolding)"
+  ]
+}
